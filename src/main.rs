@@ -1,30 +1,36 @@
 mod board;
 mod pieces;
+mod server;
 
-use crate::board::game::Game;
-use crate::pieces::pieces::Position;
+use axum::{
+    extract::{ws::WebSocketUpgrade, State},
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
+use server::AppState;
 
-fn main() {
-    let mut game = Game::new();
+#[tokio::main]
+async fn main() {
+    let state = AppState::new();
 
-    let success = game.make_move(
-        Position { x: 6, y: 4 },
-        Position { x: 4, y: 4 },
-    );
+    let app = Router::new()
+        .route("/", get(serve_html))
+        .route("/ws", get(ws_upgrade))
+        .with_state(state);
 
-    println!("White pawn move success: {}", success);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("Chess server running at http://localhost:3000");
+    axum::serve(listener, app).await.unwrap();
+}
 
-    let success = game.make_move(
-        Position { x: 1, y: 4 },
-        Position { x: 3, y: 4 },
-    );
+async fn serve_html() -> impl IntoResponse {
+    axum::response::Html(include_str!("../static/index.html"))
+}
 
-    println!("Black pawn move success: {}", success);
-
-    let success = game.make_move(
-        Position { x: 7, y: 0 },
-        Position { x: 5, y: 0 },
-    );
-
-    println!("White rook move success: {}", success);
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| server::ws::handle_socket(socket, state))
 }

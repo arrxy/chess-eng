@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chess</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#1a1a2e;color:#eee;
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+}
+#app{display:flex;flex-direction:column;align-items:center;gap:20px;padding:20px}
+h1{font-size:2.4rem;color:#e2b96f;letter-spacing:3px;font-weight:700}
+
+/* Lobby */
+#lobby{display:flex;flex-direction:column;align-items:center;gap:14px}
+.join-row{display:flex;gap:8px}
+input{
+  padding:10px 14px;border-radius:8px;border:1px solid #3a3a5c;
+  background:#2a2a4a;color:#eee;font-size:0.95rem;width:190px;
+}
+input:focus{outline:none;border-color:#e2b96f}
+input::placeholder{color:#666}
+
+/* Buttons */
+.btn{
+  padding:10px 24px;border:none;border-radius:8px;font-size:0.95rem;
+  font-weight:600;cursor:pointer;transition:opacity .15s;
+}
+.btn:hover{opacity:.85}
+.btn-gold{background:#e2b96f;color:#1a1a2e}
+.btn-outline{background:transparent;color:#e2b96f;border:1px solid #e2b96f}
+
+/* Game area */
+#game{display:none;flex-direction:column;align-items:center;gap:14px}
+
+/* Info bar */
+#info-bar{
+  display:flex;gap:20px;align-items:center;
+  background:#252540;padding:10px 20px;border-radius:10px;font-size:0.88rem;
+}
+.lbl{color:#666;margin-right:4px}
+.val{font-weight:600;color:#e2b96f}
+#status-pill{
+  padding:3px 12px;border-radius:20px;font-size:0.8rem;font-weight:700;
+}
+.s-waiting{background:#252540;color:#666;border:1px solid #3a3a5c}
+.s-ongoing{background:#1a3a1a;color:#6fcf97}
+.s-check{background:#3a1a1a;color:#eb5757}
+.s-checkmate{background:#3a1a1a;color:#eb5757}
+.s-stalemate{background:#3a2a1a;color:#e2b96f}
+
+/* Share strip */
+#share-strip{
+  display:none;align-items:center;gap:10px;
+  background:#252540;padding:8px 16px;border-radius:8px;font-size:0.85rem;
+}
+#share-strip code{
+  background:#1a1a2e;padding:3px 10px;border-radius:5px;
+  font-family:monospace;color:#e2b96f;font-size:0.9rem;letter-spacing:1px;
+}
+#copy-btn{background:none;border:none;color:#666;cursor:pointer;font-size:1rem;padding:0 4px}
+#copy-btn:hover{color:#e2b96f}
+
+/* Board */
+.board-wrap{display:flex;align-items:flex-start;gap:0}
+#ranks{display:flex;flex-direction:column;margin-right:4px;margin-top:0}
+.rank-label{width:16px;height:64px;display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:#555}
+.board-col{display:flex;flex-direction:column;align-items:flex-start}
+#board{
+  display:grid;grid-template-columns:repeat(8,64px);grid-template-rows:repeat(8,64px);
+  border:2px solid #3a3a5c;border-radius:3px;overflow:hidden;
+}
+#files{display:flex;margin-top:4px}
+.file-label{width:64px;height:16px;display:flex;align-items:center;justify-content:center;font-size:0.7rem;color:#555}
+
+/* Squares */
+.sq{
+  width:64px;height:64px;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;position:relative;transition:background .08s;
+}
+.sq.light{background:#f0d9b5}
+.sq.dark{background:#b58863}
+.sq.selected{background:#7fc97f!important}
+.sq.legal-dot::after{
+  content:'';position:absolute;
+  width:22px;height:22px;border-radius:50%;
+  background:rgba(0,0,0,.22);pointer-events:none;
+}
+.sq.legal-capture::after{
+  content:'';position:absolute;
+  width:62px;height:62px;border-radius:50%;
+  box-shadow:inset 0 0 0 5px rgba(0,0,0,.22);pointer-events:none;
+}
+.sq.in-check{background:#c0392b!important}
+.sq.last-from{background:#cdd16a!important}
+.sq.last-to{background:#cdd16a!important}
+
+/* Pieces */
+.piece{
+  font-size:42px;line-height:1;user-select:none;pointer-events:none;
+  position:relative;z-index:1;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));
+}
+
+/* Message */
+#msg{font-size:.82rem;min-height:18px;color:#eb5757}
+
+/* New game */
+#new-game-wrap{display:none;margin-top:4px}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>&#9820; Chess</h1>
+  <div id="msg"></div>
+
+  <div id="lobby">
+    <button class="btn btn-gold" id="create-btn">Create Game</button>
+    <div class="join-row">
+      <input id="gid-input" placeholder="Game ID" maxlength="8"/>
+      <button class="btn btn-outline" id="join-btn">Join</button>
+    </div>
+  </div>
+
+  <div id="game">
+    <div id="share-strip">
+      Share ID:&nbsp;<code id="share-id"></code>
+      <button id="copy-btn" title="Copy">&#10697;</button>
+    </div>
+    <div id="info-bar">
+      <span><span class="lbl">You:</span><span class="val" id="my-color-display">—</span></span>
+      <span><span class="lbl">Turn:</span><span class="val" id="turn-display">—</span></span>
+      <span id="status-pill" class="s-waiting">Waiting...</span>
+    </div>
+    <div class="board-wrap">
+      <div id="ranks"></div>
+      <div class="board-col">
+        <div id="board"></div>
+        <div id="files"></div>
+      </div>
+    </div>
+    <div id="new-game-wrap">
+      <button class="btn btn-gold" id="new-game-btn">New Game</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PIECES = {
+  white:{king:'&#9812;',queen:'&#9813;',rook:'&#9814;',bishop:'&#9815;',knight:'&#9816;',pawn:'&#9817;'},
+  black:{king:'&#9818;',queen:'&#9819;',rook:'&#9820;',bishop:'&#9821;',knight:'&#9822;',pawn:'&#9823;'}
+};
+const FILES = ['a','b','c','d','e','f','g','h'];
+const RANKS = ['8','7','6','5','4','3','2','1'];
+
+let ws = null;
+let myColor = null;
+let gameStarted = false;
+let board = null;      // 8x8 array of piece|null
+let turn = null;
+let status = 'waiting';
+let selected = null;   // {row, col}
+let legalMoves = [];   // [{x,y}]
+let lastMove = null;   // {from:{x,y}, to:{x,y}}
+
+function setMsg(text, isErr = false) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.style.color = isErr ? '#eb5757' : '#6fcf97';
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connect(onOpen) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = onOpen;
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => { setMsg('Disconnected.', true); gameStarted = false; };
+  ws.onerror = () => setMsg('Connection error.', true);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function handle(msg) {
+  switch (msg.type) {
+    case 'joined':
+      myColor = msg.color;
+      document.getElementById('my-color-display').textContent =
+        msg.color === 'white' ? '&#9812; White' : '&#9818; Black';
+      if (msg.color === 'white') {
+        const strip = document.getElementById('share-strip');
+        strip.style.display = 'flex';
+        document.getElementById('share-id').textContent = msg.game_id;
+        setStatus('waiting');
+      }
+      showGame();
+      break;
+
+    case 'state':
+      gameStarted = true;
+      board = msg.board;
+      turn = msg.turn;
+      status = msg.status;
+      selected = null;
+      legalMoves = [];
+      if (msg.lastMove) lastMove = msg.lastMove;
+      render();
+      updateTurnDisplay();
+      setStatus(status);
+      if (status === 'checkmate' || status === 'stalemate') {
+        document.getElementById('new-game-wrap').style.display = 'block';
+        if (status === 'checkmate') {
+          const winner = turn === 'white' ? 'Black' : 'White';
+          setMsg(`${winner} wins by checkmate!`);
+        } else {
+          setMsg('Stalemate — draw!');
+        }
+      }
+      break;
+
+    case 'possible_moves':
+      legalMoves = msg.moves;
+      render();
+      break;
+
+    case 'error':
+      setMsg(msg.message, true);
+      break;
+
+    case 'opponent_disconnected':
+      setMsg('Opponent disconnected.', true);
+      break;
+  }
+}
+
+// ── DOM setup ──────────────────────────────────────────────────────────────
+function showGame() {
+  document.getElementById('lobby').style.display = 'none';
+  const g = document.getElementById('game');
+  g.style.display = 'flex';
+  buildBoard();
+  buildCoords();
+}
+
+function buildCoords() {
+  const ranksEl = document.getElementById('ranks');
+  const filesEl = document.getElementById('files');
+  ranksEl.innerHTML = '';
+  filesEl.innerHTML = '';
+  RANKS.forEach(r => {
+    const d = document.createElement('div');
+    d.className = 'rank-label';
+    d.textContent = r;
+    ranksEl.appendChild(d);
+  });
+  FILES.forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'file-label';
+    d.textContent = f;
+    filesEl.appendChild(d);
+  });
+}
+
+function buildBoard() {
+  const el = document.getElementById('board');
+  el.innerHTML = '';
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const sq = document.createElement('div');
+      sq.className = 'sq ' + ((row + col) % 2 === 0 ? 'light' : 'dark');
+      sq.dataset.row = row;
+      sq.dataset.col = col;
+      sq.addEventListener('click', onSquareClick);
+      el.appendChild(sq);
+    }
+  }
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────
+function render() {
+  if (!board) return;
+
+  const legalSet = new Set(legalMoves.map(m => `${m.x},${m.y}`));
+
+  let kingCheckSq = null;
+  if (status === 'check' || status === 'checkmate') {
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = board[r][c];
+        if (p && p.type === 'king' && p.color === turn) {
+          kingCheckSq = `${r},${c}`;
+        }
+      }
+    }
+  }
+
+  document.querySelectorAll('.sq').forEach(sq => {
+    const row = +sq.dataset.row;
+    const col = +sq.dataset.col;
+    const key = `${row},${col}`;
+    const piece = board[row][col];
+    const isLight = (row + col) % 2 === 0;
+
+    // base color
+    sq.className = 'sq ' + (isLight ? 'light' : 'dark');
+
+    if (selected && selected.row === row && selected.col === col) {
+      sq.classList.add('selected');
+    } else if (kingCheckSq === key) {
+      sq.classList.add('in-check');
+    }
+
+    if (legalSet.has(key)) {
+      sq.classList.add(piece ? 'legal-capture' : 'legal-dot');
+    }
+
+    // piece
+    sq.innerHTML = '';
+    if (piece) {
+      const span = document.createElement('span');
+      span.className = 'piece';
+      span.innerHTML = PIECES[piece.color][piece.type];
+      sq.appendChild(span);
+    }
+  });
+}
+
+function updateTurnDisplay() {
+  const myTurn = turn === myColor;
+  const turnEl = document.getElementById('turn-display');
+  turnEl.textContent = myTurn ? `Your turn` : `${turn === 'white' ? 'White' : 'Black'}'s turn`;
+  turnEl.style.color = myTurn ? '#6fcf97' : '#e2b96f';
+}
+
+function setStatus(s) {
+  const pill = document.getElementById('status-pill');
+  const map = {
+    waiting:   ['s-waiting',  'Waiting for opponent…'],
+    ongoing:   ['s-ongoing',  'In Progress'],
+    check:     ['s-check',    '⚠ Check!'],
+    checkmate: ['s-checkmate','✓ Checkmate'],
+    stalemate: ['s-stalemate','Draw — Stalemate'],
+  };
+  const [cls, label] = map[s] || map.waiting;
+  pill.className = cls;
+  pill.textContent = label;
+}
+
+// ── Interaction ─────────────────────────────────────────────────────────────
+function onSquareClick(e) {
+  if (!gameStarted || turn !== myColor) return;
+
+  const row = +e.currentTarget.dataset.row;
+  const col = +e.currentTarget.dataset.col;
+  const legalSet = new Set(legalMoves.map(m => `${m.x},${m.y}`));
+
+  // Clicking a legal destination → make move
+  if (selected && legalSet.has(`${row},${col}`)) {
+    send({ type: 'move', from: { x: selected.row, y: selected.col }, to: { x: row, y: col } });
+    selected = null;
+    legalMoves = [];
+    return;
+  }
+
+  // Clicking own piece → select and request legal moves
+  const piece = board && board[row][col];
+  if (piece && piece.color === myColor) {
+    selected = { row, col };
+    legalMoves = [];
+    render();
+    send({ type: 'moves', x: row, y: col });
+  } else {
+    selected = null;
+    legalMoves = [];
+    render();
+  }
+}
+
+// ── Buttons ──────────────────────────────────────────────────────────────
+document.getElementById('create-btn').addEventListener('click', () => {
+  connect(() => send({ type: 'create' }));
+});
+
+document.getElementById('join-btn').addEventListener('click', () => {
+  const gid = document.getElementById('gid-input').value.trim();
+  if (!gid) { setMsg('Enter a game ID.', true); return; }
+  connect(() => send({ type: 'join', game_id: gid }));
+});
+
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const id = document.getElementById('share-id').textContent;
+  navigator.clipboard.writeText(id).then(() => setMsg('Game ID copied!'));
+});
+
+document.getElementById('new-game-btn').addEventListener('click', () => location.reload());
+</script>
+</body>
+</html>

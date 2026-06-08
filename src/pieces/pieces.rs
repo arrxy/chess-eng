@@ -22,7 +22,7 @@ pub enum PieceType {
     Knight,
     Pawn
 }
-pub trait Piece {
+pub trait Piece: Send {
     fn color(&self) -> Color;
     fn piece_type(&self) -> PieceType;
     fn can_move(&self, from: Position, to: Position) -> bool;
