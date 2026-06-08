@@ -35,6 +35,10 @@ impl Piece for Queen {
         same_row || same_col || diagonal
     }
 
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
+    }
+
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let dirs: [[i8; 2]; 8] = [
             [0, 1],

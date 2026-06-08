@@ -56,6 +56,10 @@ impl Piece for Pawn {
         false
     }
 
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
+    }
+
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let mut possible_positions: Vec<Position> = vec![];
 

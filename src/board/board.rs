@@ -2,12 +2,21 @@ use crate::pieces::bishop::Bishop;
 use crate::pieces::king::King;
 use crate::pieces::knight::Knight;
 use crate::pieces::pawn::Pawn;
-use crate::pieces::pieces::{Color, Piece, Position};
+use crate::pieces::pieces::{Color, Piece, PieceType, Position};
 use crate::pieces::queen::Queen;
 use crate::pieces::rook::Rook;
 
 pub struct Board {
     pub board: Vec<Vec<Option<Box<dyn Piece>>>>,
+}
+
+impl Clone for Board {
+    fn clone(&self) -> Self {
+        let board = self.board.iter()
+            .map(|row| row.iter().map(|cell| cell.as_ref().map(|p| p.clone_box())).collect())
+            .collect();
+        Self { board }
+    }
 }
 
 impl Board {
@@ -86,5 +95,57 @@ impl Board {
         self.board[to.x as usize][to.y as usize] = piece;
 
         true
+    }
+
+    pub fn apply_move(&self, from: Position, to: Position) -> Option<Board> {
+        if !Self::in_bounds(from) || !Self::in_bounds(to) {
+            return None;
+        }
+        if self.board[from.x as usize][from.y as usize].is_none() {
+            return None;
+        }
+        let mut new_board = self.clone();
+        new_board.move_piece(from, to);
+        Some(new_board)
+    }
+
+    pub fn find_king(&self, color: Color) -> Option<Position> {
+        for row in 0..8u8 {
+            for col in 0..8u8 {
+                let pos = Position { x: row, y: col };
+                if let Some(piece) = self.get_piece(pos) {
+                    if piece.color() == color && matches!(piece.piece_type(), PieceType::King) {
+                        return Some(pos);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn is_attacked(&self, pos: Position, by_color: Color) -> bool {
+        for row in 0..8u8 {
+            for col in 0..8u8 {
+                let from = Position { x: row, y: col };
+                if let Some(piece) = self.get_piece(from) {
+                    if piece.color() == by_color && piece.possible_moves(from, self).contains(&pos) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn is_in_check(&self, color: Color) -> bool {
+        let king_pos = match self.find_king(color) {
+            Some(pos) => pos,
+            None => return false,
+        };
+        let opponent = match color {
+            Color::White => Color::Black,
+            Color::Black => Color::White,
+        };
+        self.is_attacked(king_pos, opponent)
     }
 }

@@ -27,6 +27,10 @@ impl Piece for King {
         true
     }
 
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
+    }
+
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let dirs: [[i8;2];8] = [
             [0, 1], [0, -1], [1, 0], [-1, 0], [-1,-1], [1,1], [1,-1], [-1,1]

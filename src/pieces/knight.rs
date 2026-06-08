@@ -28,6 +28,10 @@ impl Piece for Knight {
         false
     }
 
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
+    }
+
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let dirs: [[i8;2];8] = [
             [-2, -1],
@@ -37,7 +41,7 @@ impl Piece for Knight {
             [1, -2],
             [1, 2],
             [-1, -2],
-            [-1, -2]
+            [-1, 2]
         ];
         let mut possible_positions: Vec<Position> = vec![];
         for [dx, dy] in dirs {

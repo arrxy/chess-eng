@@ -31,6 +31,10 @@ impl Piece for Rook {
         same_row || same_col
     }
 
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
+    }
+
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let dirs: [[i8; 2]; 4] = [
             [0, 1],

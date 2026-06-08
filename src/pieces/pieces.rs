@@ -27,4 +27,5 @@ pub trait Piece {
     fn piece_type(&self) -> PieceType;
     fn can_move(&self, from: Position, to: Position) -> bool;
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
+    fn clone_box(&self) -> Box<dyn Piece>;
 }
