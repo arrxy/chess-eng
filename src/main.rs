@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use server::AppState;
+use serde_json::json;
 
 #[tokio::main]
 async fn main() {
@@ -17,6 +18,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(serve_html))
         .route("/ws", get(ws_upgrade))
+        .route("/stats", get(stats))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -26,6 +28,11 @@ async fn main() {
 
 async fn serve_html() -> impl IntoResponse {
     axum::response::Html(include_str!("../static/index.html"))
+}
+
+async fn stats(State(state): State<AppState>) -> impl IntoResponse {
+    let count = state.games.lock().unwrap().len();
+    axum::Json(json!({ "games": count }))
 }
 
 async fn ws_upgrade(
