@@ -110,6 +110,17 @@ pub fn piece_type_str(t: PieceType) -> &'static str {
     }
 }
 
+/// Pieces a pawn may promote to; anything else is rejected.
+pub fn promotion_from_str(s: &str) -> Option<PieceType> {
+    match s {
+        "queen" => Some(PieceType::Queen),
+        "rook" => Some(PieceType::Rook),
+        "bishop" => Some(PieceType::Bishop),
+        "knight" => Some(PieceType::Knight),
+        _ => None,
+    }
+}
+
 pub fn board_json(game: &Game) -> serde_json::Value {
     let board = game.board();
     let squares: Vec<Vec<serde_json::Value>> = (0..8usize)

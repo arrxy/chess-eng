@@ -6,8 +6,8 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::board::game::{Game, GameStatus};
 use crate::db::game_schema::{self, Move as MoveRecord};
-use crate::pieces::pieces::{Color, Position};
-use super::{state_json, AppState, GameSession, SessionUser, new_game_id};
+use crate::pieces::pieces::{Color, PieceType, Position};
+use super::{promotion_from_str, state_json, AppState, GameSession, SessionUser, new_game_id};
 
 fn persist_game(state: &AppState, doc: game_schema::Game) {
     let db = state.db.clone();
@@ -102,6 +102,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let fy = v["from"]["y"].as_u64().unwrap_or(0) as u8;
                         let tx_ = v["to"]["x"].as_u64().unwrap_or(0) as u8;
                         let ty_ = v["to"]["y"].as_u64().unwrap_or(0) as u8;
+                        let promotion = v["promotion"].as_str().and_then(promotion_from_str);
 
                         let mut finished_doc: Option<game_schema::Game> = None;
                         {
@@ -119,9 +120,23 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
 
                                 // Look before the move so we can record the piece and any capture
                                 let piece = session.game.board().get_piece(from).map(|p| p.piece_type());
-                                let captured = session.game.board().get_piece(to).map(|p| p.piece_type());
+                                let mut captured = session.game.board().get_piece(to).map(|p| p.piece_type());
 
-                                if session.game.make_move(from, to) {
+                                if session.game.make_move(from, to, promotion) {
+                                    let moved_pawn = matches!(piece, Some(PieceType::Pawn));
+                                    // en passant: a pawn capture that lands on an empty square
+                                    if captured.is_none() && moved_pawn && fy != ty_ {
+                                        captured = Some(PieceType::Pawn);
+                                    }
+                                    let last_rank = match color {
+                                        Color::White => 0,
+                                        Color::Black => 7,
+                                    };
+                                    let promoted = if moved_pawn && tx_ == last_rank {
+                                        Some(promotion.unwrap_or(PieceType::Queen))
+                                    } else {
+                                        None
+                                    };
                                     if let Some(piece) = piece {
                                         session.moves.push(MoveRecord {
                                             color,
@@ -131,6 +146,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                             to_x: tx_ as usize,
                                             to_y: ty_ as usize,
                                             captured,
+                                            promotion: promoted,
                                             created_at: DateTime::now(),
                                         });
                                     }

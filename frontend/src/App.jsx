@@ -38,6 +38,8 @@ export default function App() {
   const [gameStarted, setGameStarted] = useState(false);
   const [players, setPlayers]     = useState(null);
   const [captured, setCaptured]   = useState({ white: [], black: [] });
+  // pending pawn promotion: { from, to } while the piece picker is open
+  const [promo, setPromo]         = useState(null);
 
   // auth
   const [user, setUser]           = useState(null);
@@ -90,6 +92,7 @@ export default function App() {
         setLastMove(null);
         setPlayers(null);
         setCaptured({ white: [], black: [] });
+        setPromo(null);
         break;
 
       case 'state':
@@ -144,9 +147,14 @@ export default function App() {
     const legalSet = new Set(legalMovesRef.current.map(m => `${m.x},${m.y}`));
 
     if (selectedRef.current && legalSet.has(`${row},${col}`)) {
-      send({ type: 'move',
-             from: { x: selectedRef.current.row, y: selectedRef.current.col },
-             to:   { x: row, y: col } });
+      const from = { x: selectedRef.current.row, y: selectedRef.current.col };
+      const piece = boardRef.current[from.x][from.y];
+      const lastRank = myColorRef.current === 'white' ? 0 : 7;
+      if (piece && piece.type === 'pawn' && row === lastRank) {
+        setPromo({ from, to: { x: row, y: col } });
+        return;
+      }
+      send({ type: 'move', from, to: { x: row, y: col } });
       setSelected(null);
       setLegalMoves([]);
       return;
@@ -163,6 +171,16 @@ export default function App() {
     }
   }, [send]);
 
+  const onPromote = useCallback((pieceType) => {
+    if (!promo) return;
+    if (pieceType) {
+      send({ type: 'move', from: promo.from, to: promo.to, promotion: pieceType });
+    }
+    setPromo(null);
+    setSelected(null);
+    setLegalMoves([]);
+  }, [promo, send]);
+
   const onCreate = useCallback(() => connect(() => send({ type: 'create' })), [connect, send]);
   const onJoin   = useCallback((gid) => connect(() => send({ type: 'join', game_id: gid })), [connect, send]);
   const onNewGame = useCallback(() => {
@@ -172,6 +190,7 @@ export default function App() {
     setSelected(null); setLegalMoves([]); setLastMove(null);
     setMsg(null); setGameStarted(false);
     setPlayers(null); setCaptured({ white: [], black: [] });
+    setPromo(null);
   }, []);
   const onCopy = useCallback(() => {
     navigator.clipboard.writeText(gameId).then(() => showMsg('Copied!'));
@@ -218,8 +237,9 @@ export default function App() {
           myColor={myColor} turn={turn} status={status} board={board}
           selected={selected} legalMoves={legalMoves} lastMove={lastMove}
           gameId={gameId} gameStarted={gameStarted} msg={msg}
-          players={players} captured={captured} user={user}
-          onSquareClick={onSquareClick} onNewGame={onNewGame} onCopy={onCopy} />}
+          players={players} captured={captured} user={user} promo={promo}
+          onSquareClick={onSquareClick} onNewGame={onNewGame} onCopy={onCopy}
+          onPromote={onPromote} />}
       {phase === 'history' &&
         <MyGames onBack={() => setPhase('lobby')}
           onReplay={(g) => { setReplayGame(g); setPhase('replay'); }} />}

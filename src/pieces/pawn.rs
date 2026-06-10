@@ -121,6 +121,14 @@ impl Piece for Pawn {
                 if piece.color() != self.color {
                     possible_positions.push(capture_pos);
                 }
+            } else if board.en_passant_target == Some(capture_pos) {
+                // the pawn being taken sits beside us, not on the target square
+                let victim = &board.board[from.x as usize][capture_pos.y as usize];
+                if victim.as_ref().map_or(false, |p| {
+                    p.color() != self.color && matches!(p.piece_type(), PieceType::Pawn)
+                }) {
+                    possible_positions.push(capture_pos);
+                }
             }
         }
 

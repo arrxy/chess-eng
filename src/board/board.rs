@@ -6,8 +6,30 @@ use crate::pieces::pieces::{Color, Piece, PieceType, Position};
 use crate::pieces::queen::Queen;
 use crate::pieces::rook::Rook;
 
+#[derive(Clone, Copy)]
+pub struct CastlingRights {
+    pub white_kingside: bool,
+    pub white_queenside: bool,
+    pub black_kingside: bool,
+    pub black_queenside: bool,
+}
+
+impl CastlingRights {
+    fn new() -> Self {
+        Self {
+            white_kingside: true,
+            white_queenside: true,
+            black_kingside: true,
+            black_queenside: true,
+        }
+    }
+}
+
 pub struct Board {
     pub board: Vec<Vec<Option<Box<dyn Piece>>>>,
+    /// Square a pawn can capture onto via en passant this turn (set after a double push).
+    pub en_passant_target: Option<Position>,
+    pub castling: CastlingRights,
 }
 
 impl Clone for Board {
@@ -15,7 +37,11 @@ impl Clone for Board {
         let board = self.board.iter()
             .map(|row| row.iter().map(|cell| cell.as_ref().map(|p| p.clone_box())).collect())
             .collect();
-        Self { board }
+        Self {
+            board,
+            en_passant_target: self.en_passant_target,
+            castling: self.castling,
+        }
     }
 }
 
@@ -48,7 +74,11 @@ impl Board {
         board[7][6] = Some(Box::new(Knight::new(Color::White)));
         board[7][7] = Some(Box::new(Rook::new(Color::White)));
 
-        Self { board }
+        Self {
+            board,
+            en_passant_target: None,
+            castling: CastlingRights::new(),
+        }
     }
 
     pub fn in_bounds(pos: Position) -> bool {
@@ -90,11 +120,111 @@ impl Board {
             return false;
         }
 
+        let moved_type = self.board[from.x as usize][from.y as usize]
+            .as_ref()
+            .map(|p| p.piece_type())
+            .unwrap();
+
+        // en passant: a pawn capture landing on an empty square takes the
+        // pawn that just double-pushed past it
+        if matches!(moved_type, PieceType::Pawn)
+            && from.y != to.y
+            && self.board[to.x as usize][to.y as usize].is_none()
+        {
+            self.board[from.x as usize][to.y as usize] = None;
+        }
+
+        // castling: the king moves two files, the rook crosses over it
+        if matches!(moved_type, PieceType::King) && (to.y as i8 - from.y as i8).abs() == 2 {
+            let (rook_from, rook_to) = if to.y > from.y { (7usize, 5usize) } else { (0usize, 3usize) };
+            let rook = self.board[from.x as usize][rook_from].take();
+            self.board[from.x as usize][rook_to] = rook;
+        }
+
         let piece = self.board[from.x as usize][from.y as usize].take();
 
         self.board[to.x as usize][to.y as usize] = piece;
 
+        self.en_passant_target = if matches!(moved_type, PieceType::Pawn)
+            && (to.x as i8 - from.x as i8).abs() == 2
+        {
+            Some(Position { x: (from.x + to.x) / 2, y: from.y })
+        } else {
+            None
+        };
+
+        self.update_castling_rights(from, to);
+
         true
+    }
+
+    /// Moving the king or a rook — or capturing a rook on its home square —
+    /// forfeits the matching castling rights.
+    fn update_castling_rights(&mut self, from: Position, to: Position) {
+        for sq in [from, to] {
+            match (sq.x, sq.y) {
+                (7, 4) => {
+                    self.castling.white_kingside = false;
+                    self.castling.white_queenside = false;
+                }
+                (7, 0) => self.castling.white_queenside = false,
+                (7, 7) => self.castling.white_kingside = false,
+                (0, 4) => {
+                    self.castling.black_kingside = false;
+                    self.castling.black_queenside = false;
+                }
+                (0, 0) => self.castling.black_queenside = false,
+                (0, 7) => self.castling.black_kingside = false,
+                _ => {}
+            }
+        }
+    }
+
+    /// King destinations for legal castling. Kept out of `King::possible_moves`
+    /// because the attack checks here would recurse through `is_attacked`.
+    pub fn castling_moves(&self, color: Color) -> Vec<Position> {
+        let row: u8 = match color {
+            Color::White => 7,
+            Color::Black => 0,
+        };
+        let (kingside, queenside) = match color {
+            Color::White => (self.castling.white_kingside, self.castling.white_queenside),
+            Color::Black => (self.castling.black_kingside, self.castling.black_queenside),
+        };
+        if !kingside && !queenside {
+            return vec![];
+        }
+        let opponent = match color {
+            Color::White => Color::Black,
+            Color::Black => Color::White,
+        };
+        let king_home = Position { x: row, y: 4 };
+        let king_at_home = self.get_piece(king_home).map_or(false, |p| {
+            p.color() == color && matches!(p.piece_type(), PieceType::King)
+        });
+        if !king_at_home || self.is_attacked(king_home, opponent) {
+            return vec![];
+        }
+
+        let mut moves = vec![];
+        if kingside
+            && self.is_empty(Position { x: row, y: 5 })
+            && self.is_empty(Position { x: row, y: 6 })
+            && !self.is_attacked(Position { x: row, y: 5 }, opponent)
+            && !self.is_attacked(Position { x: row, y: 6 }, opponent)
+        {
+            moves.push(Position { x: row, y: 6 });
+        }
+        if queenside
+            && self.is_empty(Position { x: row, y: 1 })
+            && self.is_empty(Position { x: row, y: 2 })
+            && self.is_empty(Position { x: row, y: 3 })
+            && !self.is_attacked(Position { x: row, y: 3 }, opponent)
+            && !self.is_attacked(Position { x: row, y: 2 }, opponent)
+        {
+            moves.push(Position { x: row, y: 2 });
+        }
+        moves
     }
 
     pub fn apply_move(&self, from: Position, to: Position) -> Option<Board> {
@@ -128,7 +258,22 @@ impl Board {
             for col in 0..8u8 {
                 let from = Position { x: row, y: col };
                 if let Some(piece) = self.get_piece(from) {
-                    if piece.color() == by_color && piece.possible_moves(from, self).contains(&pos) {
+                    if piece.color() != by_color {
+                        continue;
+                    }
+                    // pawns attack diagonals even when the square is empty,
+                    // which possible_moves doesn't report
+                    if matches!(piece.piece_type(), PieceType::Pawn) {
+                        let dir: i8 = match by_color {
+                            Color::White => -1,
+                            Color::Black => 1,
+                        };
+                        if pos.x as i8 == from.x as i8 + dir
+                            && (pos.y as i8 - from.y as i8).abs() == 1
+                        {
+                            return true;
+                        }
+                    } else if piece.possible_moves(from, self).contains(&pos) {
                         return true;
                     }
                 }

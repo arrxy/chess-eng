@@ -331,6 +331,28 @@ body {
 .replay-btn:disabled { opacity: .35; cursor: default; }
 .replay-count { font-family: var(--disp); font-size: 14px; color: var(--ink-soft); min-width: 64px; text-align: center; }
 
+/* pawn promotion picker */
+.board-wrap { position: relative; }
+.promo-overlay {
+  position: absolute; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(44,42,39,.35); border-radius: 10px;
+}
+.promo-card {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 16px 22px;
+}
+.promo-title { font-family: var(--disp); font-size: 16px; }
+.promo-choices { display: flex; gap: 10px; }
+.promo-btn {
+  width: 52px; height: 52px; cursor: pointer;
+  background: var(--sq-light); border: 1.5px solid var(--ink);
+  border-radius: 10px 8px 11px 9px / 8px 11px 9px 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.promo-btn:hover { background: var(--sq-dark); }
+.promo-btn .pc { font-size: 30px; }
+
 @media (max-width: 520px) {
   .topbar { padding: 12px 14px 8px; gap: 8px; align-items: center; }
   .brand-name { font-size: 22px; }
