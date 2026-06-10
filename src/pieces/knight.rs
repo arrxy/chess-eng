@@ -1,16 +1,14 @@
-use std::cmp::PartialEq;
 use crate::board::board::Board;
 use crate::pieces::pieces::{Color, Piece, PieceType, Position};
+use std::cmp::PartialEq;
 
 pub struct Knight {
-    color: Color
+    color: Color,
 }
 
 impl Knight {
     pub fn new(color: Color) -> Self {
-        Self {
-            color
-        }
+        Self { color }
     }
 }
 
@@ -23,7 +21,7 @@ impl Piece for Knight {
     }
     fn can_move(&self, from: Position, to: Position) -> bool {
         if to.x > 7 || to.y > 7 {
-            return false
+            return false;
         }
         false
     }
@@ -33,7 +31,7 @@ impl Piece for Knight {
     }
 
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
-        let dirs: [[i8;2];8] = [
+        let dirs: [[i8; 2]; 8] = [
             [-2, -1],
             [-2, 1],
             [2, -1],
@@ -41,14 +39,14 @@ impl Piece for Knight {
             [1, -2],
             [1, 2],
             [-1, -2],
-            [-1, 2]
+            [-1, 2],
         ];
         let mut possible_positions: Vec<Position> = vec![];
         for [dx, dy] in dirs {
             let nx = from.x as i8 + dx;
             let ny = from.y as i8 + dy;
             if nx < 0 || ny < 0 || nx > 7 || ny > 7 {
-                continue
+                continue;
             }
             let target = &board.board[nx as usize][ny as usize];
             if let Some(piece) = target {
@@ -58,7 +56,7 @@ impl Piece for Knight {
             }
             possible_positions.push(Position {
                 x: nx as u8,
-                y: ny as u8
+                y: ny as u8,
             })
         }
         possible_positions

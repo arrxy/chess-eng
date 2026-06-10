@@ -1,6 +1,6 @@
 pub(crate) mod board;
-mod player;
 pub(crate) mod game;
+mod player;
 
 #[cfg(test)]
 mod famous_games;

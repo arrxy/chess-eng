@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use mongodb::{Client, Collection, Database, IndexModel};
-use std::env;
 use mongodb::bson::doc;
 use mongodb::options::{ClientOptions, IndexOptions};
+use mongodb::{Client, Collection, Database, IndexModel};
+use std::env;
 
 use crate::db::game_schema::Game;
 use crate::db::session_schema::Session;
@@ -45,7 +45,8 @@ impl Db {
 }
 
 pub(crate) fn build_unique_index(key: &str, index_name: &str) -> IndexModel {
-    IndexModel::builder().keys(doc! { key: 1 })
+    IndexModel::builder()
+        .keys(doc! { key: 1 })
         .options(
             IndexOptions::builder()
                 .unique(true)
@@ -58,7 +59,8 @@ pub(crate) fn build_unique_index(key: &str, index_name: &str) -> IndexModel {
 /// Unique only across documents that actually have the field — lets many
 /// documents omit an optional field (e.g. username) without colliding.
 pub(crate) fn build_sparse_unique_index(key: &str, index_name: &str) -> IndexModel {
-    IndexModel::builder().keys(doc! { key: 1 })
+    IndexModel::builder()
+        .keys(doc! { key: 1 })
         .options(
             IndexOptions::builder()
                 .unique(true)
@@ -70,18 +72,16 @@ pub(crate) fn build_sparse_unique_index(key: &str, index_name: &str) -> IndexMod
 }
 
 pub(crate) fn build_index(key: &str, index_name: &str) -> IndexModel {
-    IndexModel::builder().keys(doc! { key: 1 })
-        .options(
-            IndexOptions::builder()
-                .name(index_name.to_string())
-                .build(),
-        )
+    IndexModel::builder()
+        .keys(doc! { key: 1 })
+        .options(IndexOptions::builder().name(index_name.to_string()).build())
         .build()
 }
 
 /// Expires documents `ttl` after the value of `key` (a Date field).
 pub(crate) fn build_ttl_index(key: &str, index_name: &str, ttl: Duration) -> IndexModel {
-    IndexModel::builder().keys(doc! { key: 1 })
+    IndexModel::builder()
+        .keys(doc! { key: 1 })
         .options(
             IndexOptions::builder()
                 .expire_after(ttl)

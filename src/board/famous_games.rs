@@ -41,7 +41,10 @@ fn piece_from_letter(c: u8) -> Option<PieceType> {
 
 /// `e4` -> y=4 (file), x = 7 - 3 = 4 (rank 4 from white's side).
 fn square(file: u8, rank: u8) -> Position {
-    Position { x: 7 - (rank - b'1'), y: file - b'a' }
+    Position {
+        x: 7 - (rank - b'1'),
+        y: file - b'a',
+    }
 }
 
 fn parse_san(raw: &str) -> San {
@@ -180,7 +183,11 @@ fn placement(board: &Board) -> String {
                         PieceType::Pawn => 'p',
                         PieceType::Empty => unreachable!(),
                     };
-                    out.push(if p.color() == Color::White { c.to_ascii_uppercase() } else { c });
+                    out.push(if p.color() == Color::White {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    });
                 }
             }
         }
@@ -203,7 +210,14 @@ struct Stats {
     stalemates: usize,
 }
 
-fn replay_game(name: &str, result: &str, final_status: &str, final_pos: &str, moves: &str, stats: &mut Stats) {
+fn replay_game(
+    name: &str,
+    result: &str,
+    final_status: &str,
+    final_pos: &str,
+    moves: &str,
+    stats: &mut Stats,
+) {
     let mut game = Game::new();
     let sans: Vec<&str> = moves.split_whitespace().collect();
     let mut last_status = GameStatus::Ongoing;
@@ -228,10 +242,16 @@ fn replay_game(name: &str, result: &str, final_status: &str, final_pos: &str, mo
                 "{ctx}: SAN says capture but target square is empty and it's not en passant"
             );
         } else {
-            assert!(target_piece.is_none(), "{ctx}: SAN says quiet move but target is occupied");
+            assert!(
+                target_piece.is_none(),
+                "{ctx}: SAN says quiet move but target is occupied"
+            );
         }
 
-        assert!(game.make_move(from, to, san.promotion), "{ctx}: make_move rejected the move");
+        assert!(
+            game.make_move(from, to, san.promotion),
+            "{ctx}: make_move rejected the move"
+        );
 
         // verify the check/mate marker against the engine
         last_status = game.status();
@@ -266,7 +286,10 @@ fn replay_game(name: &str, result: &str, final_status: &str, final_pos: &str, mo
                 Color::White => "1-0",
                 Color::Black => "0-1",
             };
-            assert_eq!(result, expected, "{ctx}: checkmate winner disagrees with game result");
+            assert_eq!(
+                result, expected,
+                "{ctx}: checkmate winner disagrees with game result"
+            );
         }
     }
 
@@ -291,7 +314,10 @@ fn replay_game(name: &str, result: &str, final_status: &str, final_pos: &str, mo
 
 #[test]
 fn replays_famous_games() {
-    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/famous_games.tsv");
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/famous_games.tsv"
+    );
     let data = std::fs::read_to_string(fixture).expect("missing tests/fixtures/famous_games.tsv");
 
     let mut stats = Stats::default();
@@ -307,14 +333,27 @@ fn replays_famous_games() {
     println!(
         "replayed {} games / {} moves: {} castles, {} en passants, {} promotions, \
          {} checks, {} checkmates, {} stalemates",
-        stats.games, stats.moves, stats.castles, stats.en_passants, stats.promotions,
-        stats.checks, stats.checkmates, stats.stalemates
+        stats.games,
+        stats.moves,
+        stats.castles,
+        stats.en_passants,
+        stats.promotions,
+        stats.checks,
+        stats.checkmates,
+        stats.stalemates
     );
 
     // the corpus must actually exercise every special mechanic
-    assert!(stats.games >= 100, "expected at least 100 games, got {}", stats.games);
+    assert!(
+        stats.games >= 100,
+        "expected at least 100 games, got {}",
+        stats.games
+    );
     assert!(stats.castles >= 100, "corpus should contain many castles");
-    assert!(stats.en_passants >= 5, "corpus should contain en passant captures");
+    assert!(
+        stats.en_passants >= 5,
+        "corpus should contain en passant captures"
+    );
     assert!(stats.promotions >= 5, "corpus should contain promotions");
     assert!(stats.checkmates >= 3, "corpus should contain checkmates");
     assert!(stats.stalemates >= 1, "corpus should contain a stalemate");

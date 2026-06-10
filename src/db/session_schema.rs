@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use mongodb::{
-    bson::{oid::ObjectId, DateTime},
     IndexModel,
+    bson::{DateTime, oid::ObjectId},
 };
 use serde::{Deserialize, Serialize};
 

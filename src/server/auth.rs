@@ -1,25 +1,25 @@
-use std::collections::HashMap;
-
 use axum::{
-    extract::State,
-    http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use futures_util::TryStreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use mongodb::bson::{doc, DateTime};
+use mongodb::bson::oid::ObjectId;
+use mongodb::bson::{DateTime, doc};
 use mongodb::options::ReturnDocument;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::db::game_schema::GameStatus;
+pub(crate) use super::{AppState, SessionUser, color_str, piece_type_str};
+use crate::db::game_schema::{Game, GameStatus, Move};
 use crate::db::mongo::Db;
 use crate::db::session_schema::Session;
 use crate::db::user_schema::User;
-use super::{color_str, piece_type_str, AppState, SessionUser};
 
 const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const SESSION_COOKIE: &str = "session";
@@ -117,17 +117,24 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-pub async fn user_from_headers(db: &Db, headers: &HeaderMap) -> Option<SessionUser> {
+pub async fn user_from_headers(state: &AppState, headers: &HeaderMap) -> Option<SessionUser> {
     let token = session_token(headers)?;
-    let session = db.sessions.find_one(doc! { "token": &token }).await.ok()??;
-    let user = db
-        .users
-        .find_one(doc! { "_id": session.user_id })
+    let session = state
+        .session_repository
+        .find_session_by_token(&token)
+        .await
+        .ok()??;
+    let user = state
+        .user_repository
+        .find_by_user_id(&session.user_id)
         .await
         .ok()??;
     Some(SessionUser {
         id: user.id?,
-        name: user.name.or(user.email).unwrap_or_else(|| "Player".to_string()),
+        name: user
+            .name
+            .or(user.email)
+            .unwrap_or_else(|| "Player".to_string()),
         picture: user.picture,
     })
 }
@@ -136,7 +143,7 @@ fn user_json(user: &SessionUser) -> Value {
     json!({ "name": user.name, "picture": user.picture })
 }
 
-fn error_response(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
@@ -153,10 +160,7 @@ pub struct GoogleLogin {
     credential: String,
 }
 
-pub async fn auth_google(
-    State(state): State<AppState>,
-    Json(body): Json<GoogleLogin>,
-) -> Response {
+pub async fn auth_google(State(state): State<AppState>, Json(body): Json<GoogleLogin>) -> Response {
     let Some(google) = &state.google else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -218,7 +222,10 @@ pub async fn auth_google(
 
     let session_user = SessionUser {
         id: user_id,
-        name: user.name.or(user.email).unwrap_or_else(|| "Player".to_string()),
+        name: user
+            .name
+            .or(user.email)
+            .unwrap_or_else(|| "Player".to_string()),
         picture: user.picture,
     };
     let cookie = format!(
@@ -232,7 +239,7 @@ pub async fn auth_google(
 }
 
 pub async fn auth_me(State(state): State<AppState>, headers: HeaderMap) -> Json<Value> {
-    let user = user_from_headers(&state.db, &headers).await;
+    let user = user_from_headers(&state, &headers).await;
     Json(json!({ "user": user.as_ref().map(user_json) }))
 }
 
@@ -242,82 +249,4 @@ pub async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> R
     }
     let cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     ([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response()
-}
-
-// ── Game history ─────────────────────────────────────────────────────────────
-
-pub async fn my_games(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(user) = user_from_headers(&state.db, &headers).await else {
-        return error_response(StatusCode::UNAUTHORIZED, "not signed in");
-    };
-
-    let filter = doc! {
-        "$or": [
-            { "white_user_id": user.id },
-            { "black_user_id": user.id },
-        ]
-    };
-    let cursor = match state
-        .db
-        .games
-        .find(filter)
-        .sort(doc! { "created_at": -1 })
-        .limit(50)
-        .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("game history query failed: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
-        }
-    };
-    let games: Vec<_> = match cursor.try_collect::<Vec<_>>().await {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("game history query failed: {e}");
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
-        }
-    };
-
-    let games: Vec<Value> = games
-        .iter()
-        .map(|g| {
-            let your_color = if g.white_user_id == Some(user.id) {
-                "white"
-            } else {
-                "black"
-            };
-            let result = match g.status {
-                GameStatus::WhiteWon => "white_won",
-                GameStatus::BlackWon => "black_won",
-                GameStatus::Draw => "draw",
-                GameStatus::Abandoned => "abandoned",
-            };
-            let moves: Vec<Value> = g
-                .moves
-                .iter()
-                .map(|m| {
-                    json!({
-                        "color": color_str(m.color),
-                        "piece": piece_type_str(m.piece),
-                        "from": { "x": m.from_x, "y": m.from_y },
-                        "to": { "x": m.to_x, "y": m.to_y },
-                        "captured": m.captured.map(piece_type_str),
-                        "promotion": m.promotion.map(piece_type_str),
-                    })
-                })
-                .collect();
-            json!({
-                "id": g.id.map(|id| id.to_hex()),
-                "white_name": g.white_name,
-                "black_name": g.black_name,
-                "your_color": your_color,
-                "result": result,
-                "moves": moves,
-                "created_at": g.created_at.timestamp_millis(),
-            })
-        })
-        .collect();
-
-    Json(json!({ "games": games })).into_response()
 }

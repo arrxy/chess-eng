@@ -1,18 +1,13 @@
 mod board;
-mod pieces;
-mod server;
 mod db;
+mod pieces;
+mod repository;
+mod routes;
+mod server;
+mod service;
 
-use axum::{
-    extract::{ws::WebSocketUpgrade, State},
-    http::{header, HeaderMap},
-    response::IntoResponse,
-    routing::{get, post},
-    Router,
-};
 use db::mongo::Db;
-use server::{auth, AppState};
-use serde_json::json;
+use server::auth;
 
 #[tokio::main]
 async fn main() {
@@ -30,59 +25,5 @@ async fn main() {
             None
         }
     };
-
-    let state = AppState::new(db, google);
-
-    let app = Router::new()
-        .route("/", get(serve_html))
-        .route("/app.js", get(serve_js))
-        .route("/app.css", get(serve_css))
-        .route("/ws", get(ws_upgrade))
-        .route("/stats", get(stats))
-        .route("/auth/config", get(auth::auth_config))
-        .route("/auth/google", post(auth::auth_google))
-        .route("/auth/me", get(auth::auth_me))
-        .route("/auth/logout", post(auth::auth_logout))
-        .route("/api/games", get(auth::my_games))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Chess server running at http://localhost:3000");
-    axum::serve(listener, app).await.unwrap();
-}
-
-// The frontend is built by Vite (`cd frontend && npm run build`) into
-// static/dist/ with fixed filenames, then embedded into the binary here.
-async fn serve_html() -> impl IntoResponse {
-    axum::response::Html(include_str!("../static/dist/index.html"))
-}
-
-async fn serve_js() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/javascript")],
-        include_str!("../static/dist/app.js"),
-    )
-}
-
-async fn serve_css() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css")],
-        include_str!("../static/dist/app.css"),
-    )
-}
-
-async fn stats(State(state): State<AppState>) -> impl IntoResponse {
-    let count = state.games.lock().unwrap().len();
-    axum::Json(json!({ "games": count }))
-}
-
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    // The browser sends the session cookie with the upgrade request, so the
-    // connection knows who is playing before any message arrives.
-    let user = auth::user_from_headers(&state.db, &headers).await;
-    ws.on_upgrade(move |socket| server::ws::handle_socket(socket, state, user))
+    routes::router::route(db, google).await;
 }

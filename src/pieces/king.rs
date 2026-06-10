@@ -1,15 +1,13 @@
 use crate::board::board::Board;
-use crate::pieces::pieces::{ Color, Piece, PieceType, Position };
+use crate::pieces::pieces::{Color, Piece, PieceType, Position};
 
 pub struct King {
-    color: Color
+    color: Color,
 }
 
 impl King {
     pub fn new(color: Color) -> Self {
-        Self {
-            color
-        }
+        Self { color }
     }
 }
 
@@ -22,7 +20,7 @@ impl Piece for King {
     }
     fn can_move(&self, from: Position, to: Position) -> bool {
         if to.x > 7 || to.y > 7 {
-            return false
+            return false;
         }
         true
     }
@@ -32,15 +30,22 @@ impl Piece for King {
     }
 
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
-        let dirs: [[i8;2];8] = [
-            [0, 1], [0, -1], [1, 0], [-1, 0], [-1,-1], [1,1], [1,-1], [-1,1]
+        let dirs: [[i8; 2]; 8] = [
+            [0, 1],
+            [0, -1],
+            [1, 0],
+            [-1, 0],
+            [-1, -1],
+            [1, 1],
+            [1, -1],
+            [-1, 1],
         ];
         let mut possible_positions: Vec<Position> = vec![];
         for [dx, dy] in dirs {
             let nx = from.x as i8 + dx;
             let ny = from.y as i8 + dy;
             if nx < 0 || ny < 0 || nx > 7 || ny > 7 {
-                continue
+                continue;
             }
             let target = &board.board[nx as usize][ny as usize];
             if let Some(piece) = target {
@@ -50,7 +55,7 @@ impl Piece for King {
             }
             possible_positions.push(Position {
                 x: nx as u8,
-                y: ny as u8
+                y: ny as u8,
             })
         }
         possible_positions

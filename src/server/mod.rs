@@ -1,18 +1,23 @@
 pub mod auth;
 pub mod ws;
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use axum::extract::ws::Message;
-use mongodb::bson::oid::ObjectId;
-use mongodb::bson::DateTime;
-use tokio::sync::mpsc::UnboundedSender;
-use uuid::Uuid;
 use crate::board::game::{Game, GameStatus};
 use crate::db::game_schema::{self, Move as MoveRecord};
 use crate::db::mongo::Db;
 use crate::pieces::pieces::{Color, PieceType};
 use auth::GoogleVerifier;
+use axum::extract::ws::Message;
+use mongodb::bson::DateTime;
+use mongodb::bson::oid::ObjectId;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::UnboundedSender;
+use uuid::Uuid;
+
+use crate::repository::game_repository::GameRepository;
+use crate::repository::session_repository::SessionRepository;
+use crate::repository::user_repository;
+pub use user_repository::UserRepository;
 
 pub type Tx = UnboundedSender<Message>;
 
@@ -81,6 +86,9 @@ impl GameSession {
 pub struct AppState {
     pub games: Arc<Mutex<HashMap<String, GameSession>>>,
     pub db: Arc<Db>,
+    pub user_repository: UserRepository,
+    pub session_repository: SessionRepository,
+    pub game_repository: GameRepository,
     pub google: Option<Arc<GoogleVerifier>>,
 }
 
@@ -88,6 +96,9 @@ impl AppState {
     pub fn new(db: Db, google: Option<GoogleVerifier>) -> Self {
         Self {
             games: Arc::new(Mutex::new(HashMap::new())),
+            user_repository: UserRepository::new(db.users.clone()),
+            session_repository: SessionRepository::new(db.sessions.clone()),
+            game_repository: GameRepository::new(db.games.clone()),
             db: Arc::new(db),
             google: google.map(Arc::new),
         }
@@ -147,7 +158,12 @@ pub fn color_str(c: Color) -> &'static str {
 }
 
 fn captured_json(pieces: &[PieceType]) -> serde_json::Value {
-    serde_json::json!(pieces.iter().map(|&p| piece_type_str(p)).collect::<Vec<_>>())
+    serde_json::json!(
+        pieces
+            .iter()
+            .map(|&p| piece_type_str(p))
+            .collect::<Vec<_>>()
+    )
 }
 
 pub fn players_json(session: &GameSession) -> serde_json::Value {
