@@ -23,7 +23,7 @@ pub async fn my_games(
     headers: HeaderMap,
 ) -> Response {
     let Some(user) = user_from_headers(&state, &headers).await else {
-        return crate::server::auth::error_response(StatusCode::UNAUTHORIZED, "not signed in");
+        return auth::error_response(StatusCode::UNAUTHORIZED, "not signed in");
     };
     let games = match state
         .game_repository
@@ -32,7 +32,7 @@ pub async fn my_games(
     {
         Ok(games) => games,
         Err(_) => {
-            return crate::server::auth::error_response(
+            return auth::error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database error",
             );
@@ -46,7 +46,7 @@ pub async fn my_games(
 
 pub(crate) async fn stats(State(state): State<AppState>) -> impl IntoResponse {
     let count = state.games.lock().unwrap().len();
-    axum::Json(json!({ "games": count }))
+    Json(json!({ "games": count }))
 }
 
 pub(crate) async fn ws_upgrade(
@@ -56,7 +56,7 @@ pub(crate) async fn ws_upgrade(
 ) -> impl IntoResponse {
     // The browser sends the session cookie with the upgrade request, so the
     // connection knows who is playing before any message arrives.
-    let user = auth::user_from_headers(&state, &headers).await;
+    let user = user_from_headers(&state, &headers).await;
     ws.on_upgrade(move |socket| server::ws::handle_socket(socket, state, user))
 }
 
