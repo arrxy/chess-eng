@@ -1,4 +1,5 @@
 use crate::board::board::{Board};
+use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, PartialEq)]
 pub struct Position {
@@ -6,13 +7,13 @@ pub struct Position {
     pub y: u8
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Color {
     White,
     Black
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum PieceType {
     Empty,
     King,
