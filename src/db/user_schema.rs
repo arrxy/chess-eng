@@ -2,7 +2,7 @@ use mongodb::{
     bson::{oid::ObjectId, DateTime, doc},
     IndexModel,
 };
-use mongo::{build_unique_index};
+use mongo::{build_sparse_unique_index, build_unique_index};
 use serde::{Deserialize, Serialize};
 use crate::db::mongo;
 
@@ -12,10 +12,16 @@ pub struct User {
     pub id: Option<ObjectId>,
     pub google_id: String,
 
+    // Optional fields are omitted from the document when absent so the
+    // sparse unique indexes don't collide on repeated nulls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
 
     pub created_at: DateTime,
@@ -47,8 +53,8 @@ impl User {
     pub fn indexes() -> Vec<IndexModel> {
         vec![
             build_unique_index("google_id", "google_id_index"),
-            build_unique_index("email", "unique_email"),
-            build_unique_index("username", "unique_username"),
+            build_sparse_unique_index("email", "unique_email"),
+            build_sparse_unique_index("username", "unique_username"),
         ]
     }
 }

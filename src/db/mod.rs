@@ -1,3 +1,4 @@
 pub mod mongo;
-mod user_schema;
-mod game_schema;
+pub mod user_schema;
+pub mod game_schema;
+pub mod session_schema;

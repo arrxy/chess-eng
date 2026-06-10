@@ -14,9 +14,11 @@ cargo fmt            # format
 
 No tests are currently defined. Add them with `#[cfg(test)]` modules and run with `cargo test`.
 
+**Environment:** copy `.env.example` to `.env`. `MONGODB_URI`/`MONGODB_DB` are required at startup; `GOOGLE_CLIENT_ID` is optional (Google login is hidden when unset).
+
 ## Architecture
 
-This is a Rust chess engine (Rust edition 2024, no external dependencies).
+This is a Rust chess engine (Rust edition 2024) with an Axum server, MongoDB persistence, and Google sign-in.
 
 **Module layout:**
 
@@ -27,6 +29,10 @@ This is a Rust chess engine (Rust edition 2024, no external dependencies).
 - `src/pieces/` — piece logic
   - `pieces.rs` — shared types: `Position { x, y: u8 }`, `Color`, `PieceType`, and the `Piece` trait
   - one file per piece type (`pawn.rs`, `rook.rs`, `bishop.rs`, `knight.rs`, `queen.rs`, `king.rs`)
+- `src/db/` — MongoDB layer
+  - `mongo.rs` — `connect_db()`, `Db` struct (typed `users`/`games`/`sessions` collections), index builders
+  - `user_schema.rs` / `game_schema.rs` / `session_schema.rs` — document structs + their indexes
+- `src/server/` — Axum state, WebSocket handler (`ws.rs`), auth + history HTTP handlers (`auth.rs`)
 
 **`Piece` trait** (in `pieces/pieces.rs`):
 ```rust
@@ -47,9 +53,15 @@ fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
 `cargo run` starts an Axum HTTP+WebSocket server on `:3000`. `GET /` serves the embedded single-page frontend (`static/index.html` via `include_str!`). `GET /ws` is the WebSocket endpoint.
 
 **In-memory state** (`src/server/`):
-- `AppState` — `Arc<Mutex<HashMap<String, GameSession>>>`, shared across all connections
-- `GameSession` — owns the `Game` plus `Option<Tx>` senders for white and black
+- `AppState` — games map + `Arc<Db>` + optional `GoogleVerifier`, shared across all connections
+- `GameSession` — owns the `Game`, `Option<Tx>` senders, optional `SessionUser` per color, the move list, and captured-piece lists
 - Games are cleaned up when both players disconnect
+
+**Auth** (`src/server/auth.rs`): Google Identity Services button in the page posts the ID token to `POST /auth/google`; the server verifies it against Google's JWKS (`jsonwebtoken` + `reqwest`), upserts the user, and issues an opaque session token in an HTTP-only `session` cookie (Mongo `sessions` collection, 30-day TTL index). The WebSocket upgrade reads the same cookie so connections know who is playing. Anonymous play needs no login.
+
+**HTTP routes:** `GET /auth/config` (Google client id or null), `POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `GET /api/games` (signed-in user's finished games with full move lists), `GET /stats`.
+
+**Persistence:** a game is written to Mongo once, when it ends, and only if at least one player is signed in. Checkmate → `WhiteWon`/`BlackWon`, stalemate → `Draw`, mid-game disconnect → `Abandoned`. Anonymous-vs-anonymous games are never stored.
 
 **WebSocket protocol** (JSON text frames):
 
@@ -60,11 +72,11 @@ fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
 | Client → | `{"type":"move","from":{"x":…,"y":…},"to":{…}}` |
 | Client → | `{"type":"moves","x":…,"y":…}` |
 | Server → | `{"type":"joined","game_id":"…","color":"white"\|"black"}` |
-| Server → | `{"type":"state","board":[[…]],"turn":"white"\|"black","status":"ongoing"\|"check"\|"checkmate"\|"stalemate"}` |
+| Server → | `{"type":"state","board":[[…]],"turn":…,"status":…,"players":{"white":name\|null,"black":…},"captured":{"white":[piece,…],"black":[…]},"lastMove":{…}?}` |
 | Server → | `{"type":"possible_moves","moves":[{"x":…,"y":…},…]}` |
 | Server → | `{"type":"error","message":"…"}` |
 | Server → | `{"type":"opponent_disconnected"}` |
 
-The board in `state` messages is an 8×8 JSON array (row 0 = black back rank, row 7 = white back rank). Each cell is `null` or `{"type":"pawn"|…,"color":"white"|"black"}`.
+The board in `state` messages is an 8×8 JSON array (row 0 = black back rank, row 7 = white back rank). Each cell is `null` or `{"type":"pawn"|…,"color":"white"|"black"}`. `captured.white` lists the pieces white has taken; the frontend renders them on each player row with a +N material score and also uses them for the replay viewer reached via "my games".
 
-**Not yet implemented:** en passant, castling, pawn promotion.
+**Not yet implemented:** en passant, castling, pawn promotion, reconnecting to an in-progress game.

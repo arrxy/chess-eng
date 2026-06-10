@@ -1,12 +1,12 @@
 use mongodb::{
-    bson::{doc, oid::ObjectId, DateTime},
+    bson::{oid::ObjectId, DateTime},
     IndexModel,
 };
 use serde::{Deserialize, Serialize};
 use crate::pieces::pieces::{Color, PieceType};
 use crate::db::mongo::{build_index};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Move {
     pub color: Color,
     pub piece: PieceType,
@@ -19,6 +19,9 @@ pub struct Move {
     pub to_x: usize,
     pub to_y: usize,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured: Option<PieceType>,
+
     pub created_at: DateTime,
 }
 
@@ -27,8 +30,17 @@ pub struct Game {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
 
-    pub white_user_id: ObjectId,
-    pub black_user_id: ObjectId,
+    // None = that side was played anonymously
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub white_user_id: Option<ObjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub black_user_id: Option<ObjectId>,
+
+    // Display names captured at game time so history doesn't need a join
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub white_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub black_name: Option<String>,
 
     pub moves: Vec<Move>,
 
@@ -38,33 +50,15 @@ pub struct Game {
     pub updated_at: DateTime,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum GameStatus {
-    Waiting,
-    Active,
     WhiteWon,
     BlackWon,
     Draw,
+    Abandoned,
 }
 
 impl Game {
-    pub fn new(
-        white_user_id: ObjectId,
-        black_user_id: ObjectId,
-    ) -> Self {
-        let now = DateTime::now();
-
-        Self {
-            id: None,
-            white_user_id,
-            black_user_id,
-            moves: Vec::new(),
-            status: GameStatus::Active,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
     pub fn indexes() -> Vec<IndexModel> {
         vec![
             build_index("white_user_id", "idx_white_user_id"),

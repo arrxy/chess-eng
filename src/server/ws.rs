@@ -1,13 +1,24 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use mongodb::bson::DateTime;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::board::game::{Game, GameStatus};
+use crate::db::game_schema::{self, Move as MoveRecord};
 use crate::pieces::pieces::{Color, Position};
-use super::{AppState, GameSession, board_json, color_str, new_game_id};
+use super::{state_json, AppState, GameSession, SessionUser, new_game_id};
 
-pub async fn handle_socket(socket: WebSocket, state: AppState) {
+fn persist_game(state: &AppState, doc: game_schema::Game) {
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        if let Err(e) = db.games.insert_one(doc).await {
+            eprintln!("failed to persist game: {e}");
+        }
+    });
+}
+
+pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<SessionUser>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = unbounded_channel::<Message>();
 
@@ -36,11 +47,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
                         let gid = new_game_id();
                         state.games.lock().unwrap().insert(
                             gid.clone(),
-                            GameSession {
-                                game: Game::new(),
-                                white_tx: Some(tx.clone()),
-                                black_tx: None,
-                            },
+                            GameSession::new(Game::new(), tx.clone(), user.clone()),
                         );
                         game_id = Some(gid.clone());
                         my_color = Some(Color::White);
@@ -68,18 +75,12 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
                             }
                             Some(session) => {
                                 session.black_tx = Some(tx.clone());
+                                session.black_user = user.clone();
+                                session.started = true;
                                 game_id = Some(gid.clone());
                                 my_color = Some(Color::Black);
 
-                                let brd = board_json(&session.game);
-                                let state_msg = json!({
-                                    "type": "state",
-                                    "board": brd,
-                                    "turn": "white",
-                                    "status": "ongoing"
-                                })
-                                .to_string();
-
+                                let state_msg = state_json(session, None);
                                 let _ = tx.send(Message::Text(
                                     json!({"type":"joined","game_id":&gid,"color":"black"})
                                         .to_string(),
@@ -102,49 +103,87 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
                         let tx_ = v["to"]["x"].as_u64().unwrap_or(0) as u8;
                         let ty_ = v["to"]["y"].as_u64().unwrap_or(0) as u8;
 
-                        let mut games = state.games.lock().unwrap();
-                        if let Some(session) = games.get_mut(&gid) {
-                            if session.game.current_turn() != color {
-                                let _ = tx.send(Message::Text(
-                                    json!({"type":"error","message":"not your turn"}).to_string(),
-                                ));
-                                continue;
-                            }
-                            let from = Position { x: fx, y: fy };
-                            let to = Position { x: tx_, y: ty_ };
-                            if session.game.make_move(from, to) {
-                                let brd = board_json(&session.game);
-                                let turn = color_str(session.game.current_turn());
-                                let status = match session.game.status() {
-                                    GameStatus::Ongoing => "ongoing",
-                                    GameStatus::Check => "check",
-                                    GameStatus::Checkmate => "checkmate",
-                                    GameStatus::Stalemate => "stalemate",
-                                };
-                                let state_msg = json!({
-                                    "type": "state",
-                                    "board": brd,
-                                    "turn": turn,
-                                    "status": status,
-                                    "lastMove": {
-                                        "from": { "x": fx, "y": fy },
-                                        "to":   { "x": tx_, "y": ty_ }
-                                    }
-                                })
-                                .to_string();
-                                let _ = tx.send(Message::Text(state_msg.clone()));
-                                let other = match color {
-                                    Color::White => &session.black_tx,
-                                    Color::Black => &session.white_tx,
-                                };
-                                if let Some(otx) = other {
-                                    let _ = otx.send(Message::Text(state_msg));
+                        let mut finished_doc: Option<game_schema::Game> = None;
+                        {
+                            let mut games = state.games.lock().unwrap();
+                            if let Some(session) = games.get_mut(&gid) {
+                                if session.game.current_turn() != color {
+                                    let _ = tx.send(Message::Text(
+                                        json!({"type":"error","message":"not your turn"})
+                                            .to_string(),
+                                    ));
+                                    continue;
                                 }
-                            } else {
-                                let _ = tx.send(Message::Text(
-                                    json!({"type":"error","message":"invalid move"}).to_string(),
-                                ));
+                                let from = Position { x: fx, y: fy };
+                                let to = Position { x: tx_, y: ty_ };
+
+                                // Look before the move so we can record the piece and any capture
+                                let piece = session.game.board().get_piece(from).map(|p| p.piece_type());
+                                let captured = session.game.board().get_piece(to).map(|p| p.piece_type());
+
+                                if session.game.make_move(from, to) {
+                                    if let Some(piece) = piece {
+                                        session.moves.push(MoveRecord {
+                                            color,
+                                            piece,
+                                            from_x: fx as usize,
+                                            from_y: fy as usize,
+                                            to_x: tx_ as usize,
+                                            to_y: ty_ as usize,
+                                            captured,
+                                            created_at: DateTime::now(),
+                                        });
+                                    }
+                                    if let Some(taken) = captured {
+                                        match color {
+                                            Color::White => session.captured_by_white.push(taken),
+                                            Color::Black => session.captured_by_black.push(taken),
+                                        }
+                                    }
+
+                                    let state_msg = state_json(
+                                        session,
+                                        Some(json!({
+                                            "from": { "x": fx, "y": fy },
+                                            "to":   { "x": tx_, "y": ty_ }
+                                        })),
+                                    );
+                                    let _ = tx.send(Message::Text(state_msg.clone()));
+                                    let other = match color {
+                                        Color::White => &session.black_tx,
+                                        Color::Black => &session.white_tx,
+                                    };
+                                    if let Some(otx) = other {
+                                        let _ = otx.send(Message::Text(state_msg));
+                                    }
+
+                                    let final_status = match session.game.status() {
+                                        // turn already switched: the side to move is the loser
+                                        GameStatus::Checkmate => Some(match color {
+                                            Color::White => game_schema::GameStatus::WhiteWon,
+                                            Color::Black => game_schema::GameStatus::BlackWon,
+                                        }),
+                                        GameStatus::Stalemate => {
+                                            Some(game_schema::GameStatus::Draw)
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(status) = final_status {
+                                        if !session.persisted && session.has_signed_in_player() {
+                                            session.persisted = true;
+                                            finished_doc = Some(session.to_game_doc(status));
+                                        }
+                                    }
+                                } else {
+                                    let _ = tx.send(Message::Text(
+                                        json!({"type":"error","message":"invalid move"})
+                                            .to_string(),
+                                    ));
+                                }
                             }
+                        }
+                        if let Some(doc) = finished_doc {
+                            persist_game(&state, doc);
                         }
                     }
 
@@ -183,26 +222,37 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     }
 
-    // Cleanup: remove sender slot and notify opponent
+    // Cleanup: remove sender slot, notify opponent, persist abandoned games
     if let (Some(gid), Some(color)) = (game_id, my_color) {
-        let mut games = state.games.lock().unwrap();
-        if let Some(session) = games.get_mut(&gid) {
-            let disconnect_msg = json!({"type":"opponent_disconnected"}).to_string();
-            match color {
-                Color::White => {
-                    session.white_tx = None;
-                    if let Some(btx) = &session.black_tx {
-                        let _ = btx.send(Message::Text(disconnect_msg));
+        let mut abandoned_doc: Option<game_schema::Game> = None;
+        {
+            let mut games = state.games.lock().unwrap();
+            if let Some(session) = games.get_mut(&gid) {
+                let disconnect_msg = json!({"type":"opponent_disconnected"}).to_string();
+                match color {
+                    Color::White => {
+                        session.white_tx = None;
+                        if let Some(btx) = &session.black_tx {
+                            let _ = btx.send(Message::Text(disconnect_msg));
+                        }
+                    }
+                    Color::Black => {
+                        session.black_tx = None;
+                        if let Some(wtx) = &session.white_tx {
+                            let _ = wtx.send(Message::Text(disconnect_msg));
+                        }
                     }
                 }
-                Color::Black => {
-                    session.black_tx = None;
-                    if let Some(wtx) = &session.white_tx {
-                        let _ = wtx.send(Message::Text(disconnect_msg));
-                    }
+                if session.started && !session.persisted && session.has_signed_in_player() {
+                    session.persisted = true;
+                    abandoned_doc =
+                        Some(session.to_game_doc(game_schema::GameStatus::Abandoned));
                 }
             }
+            games.retain(|_, s| s.white_tx.is_some() || s.black_tx.is_some());
         }
-        games.retain(|_, s| s.white_tx.is_some() || s.black_tx.is_some());
+        if let Some(doc) = abandoned_doc {
+            persist_game(&state, doc);
+        }
     }
 }

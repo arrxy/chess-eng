@@ -291,6 +291,56 @@ body {
 }
 .twk-open-btn:hover { opacity: .85; }
 
+/* auth */
+.auth-box { display: flex; align-items: center; gap: 10px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--line); }
+.auth-name { font-size: 15px; }
+.linklike {
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: var(--ink-soft); font-family: var(--hand); font-size: 14px; text-decoration: underline;
+}
+.linklike:hover { color: var(--accent); }
+.gsi-wrap { display: flex; justify-content: center; width: 100%; min-height: 40px; }
+.lobby-or { font-size: 13px; color: var(--ink-soft); font-family: var(--disp); }
+
+/* captured pieces */
+.cap-row { display: flex; align-items: center; gap: 2px; font-size: 17px; line-height: 1; min-height: 19px; }
+.cap-pc.w { color: #fff; -webkit-text-stroke: 1px rgba(0,0,0,.75); }
+.cap-pc.b { color: #1a1816; }
+.cap-adv { font-family: var(--disp); font-size: 13px; color: var(--ink-soft); margin-left: 6px; }
+
+/* game history */
+.hist-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 30px 60px; }
+.hist-card { width: 100%; max-width: 480px; padding: 18px 20px; display: flex; flex-direction: column; gap: 4px; }
+.hist-title {
+  font-family: var(--disp); font-size: 18px; color: var(--ink-soft);
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+}
+.hist-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 8px;
+  border-bottom: 1.5px dashed var(--line); cursor: pointer; font-size: 15px;
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-row:hover { background: rgba(44,42,39,.04); }
+.hist-opp { flex: 1; }
+.hist-date { font-size: 12.5px; color: var(--ink-soft); font-family: var(--disp); }
+.hist-result { font-family: var(--disp); font-size: 12px; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.hist-result.win { background: rgba(50,130,80,.12); color: #3a7a4a; }
+.hist-result.loss { background: rgba(200,90,58,.12); color: #c85a3a; }
+.hist-result.draw { background: rgba(200,160,60,.12); color: #8a6a20; }
+.hist-result.abandoned { background: rgba(44,42,39,.06); color: var(--ink-soft); }
+
+/* replay */
+.replay-controls { display: flex; align-items: center; gap: 8px; }
+.replay-btn {
+  font-family: var(--hand); cursor: pointer; background: transparent;
+  color: var(--accent); border: 1.5px solid var(--accent);
+  padding: 6px 14px; border-radius: 9px 8px 10px 7px; font-size: 15px;
+}
+.replay-btn:hover { opacity: .8; }
+.replay-btn:disabled { opacity: .35; cursor: default; }
+.replay-count { font-family: var(--disp); font-size: 14px; color: var(--ink-soft); min-width: 64px; text-align: center; }
+
 @media (max-width: 520px) {
   .topbar { padding: 16px 16px 10px; }
   .divider { margin: 0 16px; }
@@ -306,6 +356,7 @@ body {
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
@@ -417,6 +468,92 @@ function TweaksPanel({ tweaks, setTweak }) {
   );
 }
 
+// ── Google sign-in ────────────────────────────────────────────────────────────
+function GoogleButton({ clientId, onUser, onError }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!clientId) return;
+    let cancelled = false;
+    const tryInit = () => {
+      if (cancelled) return;
+      if (!(window.google && window.google.accounts && window.google.accounts.id)) {
+        setTimeout(tryInit, 200); // GIS script still loading
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (resp) => {
+          try {
+            const r = await fetch('/auth/google', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ credential: resp.credential }),
+            });
+            const data = await r.json();
+            if (r.ok) onUser(data.user);
+            else onError(data.error || 'Sign-in failed.');
+          } catch {
+            onError('Sign-in failed.');
+          }
+        },
+      });
+      window.google.accounts.id.renderButton(ref.current, {
+        theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with',
+      });
+    };
+    tryInit();
+    return () => { cancelled = true; };
+  }, [clientId]);
+  return <div className="gsi-wrap"><div ref={ref} /></div>;
+}
+
+// ── Captured pieces ───────────────────────────────────────────────────────────
+function capScore(pieces) {
+  return (pieces || []).reduce((s, t) => s + (PIECE_VALUE[t] || 0), 0);
+}
+
+// `pieces` were captured by one side, so they belong to `victimColor`.
+function CapturedRow({ pieces, victimColor, adv }) {
+  return (
+    <span className="cap-row">
+      {(pieces || []).map((t, i) => (
+        <span key={i} className={`cap-pc ${victimColor === 'white' ? 'w' : 'b'}`}>
+          {GLYPH[victimColor][t]}
+        </span>
+      ))}
+      {adv > 0 && <span className="cap-adv">+{adv}</span>}
+    </span>
+  );
+}
+
+// ── Replay helpers ────────────────────────────────────────────────────────────
+// Mirrors Board::new() on the server: row 0 = black back rank, row 7 = white.
+function startBoard() {
+  const back = ['rook','knight','bishop','queen','king','bishop','knight','rook'];
+  const b = Array(8).fill(null).map(() => Array(8).fill(null));
+  back.forEach((t, c) => {
+    b[0][c] = { type: t, color: 'black' };
+    b[7][c] = { type: t, color: 'white' };
+  });
+  for (let c = 0; c < 8; c++) {
+    b[1][c] = { type: 'pawn', color: 'black' };
+    b[6][c] = { type: 'pawn', color: 'white' };
+  }
+  return b;
+}
+
+// The engine has no castling/en passant/promotion yet, so replaying a move is
+// just "piece slides from -> to" with any capture implied by the target square.
+function boardAfter(moves, n) {
+  const b = startBoard();
+  for (let i = 0; i < n; i++) {
+    const m = moves[i];
+    b[m.to.x][m.to.y] = b[m.from.x][m.from.y];
+    b[m.from.x][m.from.y] = null;
+  }
+  return b;
+}
+
 // ── Material advantage ────────────────────────────────────────────────────────
 const PIECE_VALUE = { queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, king: 0 };
 function materialAdv(board) {
@@ -508,11 +645,17 @@ function Board({ board, myColor, turn, status, selected, legalMoves, lastMove, o
 }
 
 // ── Lobby ─────────────────────────────────────────────────────────────────────
-function Lobby({ onCreate, onJoin, msg }) {
+function Lobby({ onCreate, onJoin, msg, user, clientId, onUser, onAuthError, onMyGames }) {
   const [gid, setGid] = useState('');
   return (
     <div className="lobby-wrap">
       <div className="card lobby-card">
+        {!user && clientId && (
+          <>
+            <GoogleButton clientId={clientId} onUser={onUser} onError={onAuthError} />
+            <div className="lobby-or">— or play as a guest —</div>
+          </>
+        )}
         <div className="lobby-title">start a game</div>
         <button className="btn btn-primary" onClick={onCreate}>Create Game</button>
         <hr className="lobby-hr" />
@@ -523,18 +666,127 @@ function Lobby({ onCreate, onJoin, msg }) {
           <button className="btn btn-outline"
             onClick={() => gid.trim() && onJoin(gid.trim())}>Join</button>
         </div>
+        {user && (
+          <>
+            <hr className="lobby-hr" />
+            <button className="linklike" onClick={onMyGames}>my games →</button>
+          </>
+        )}
         {msg && <div className={`msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
       </div>
     </div>
   );
 }
 
+// ── My games (history) ────────────────────────────────────────────────────────
+function resultInfo(g) {
+  if (g.result === 'draw') return { label: 'draw', cls: 'draw' };
+  if (g.result === 'abandoned') return { label: 'abandoned', cls: 'abandoned' };
+  const won = (g.result === 'white_won') === (g.your_color === 'white');
+  return won ? { label: 'won', cls: 'win' } : { label: 'lost', cls: 'loss' };
+}
+
+function MyGames({ onBack, onReplay }) {
+  const [games, setGames] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    fetch('/api/games')
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(d => setGames(d.games))
+      .catch(() => setErr('Could not load your games.'));
+  }, []);
+
+  return (
+    <div className="hist-wrap">
+      <div className="card hist-card">
+        <div className="hist-title">
+          <span>my games</span>
+          <button className="linklike" onClick={onBack}>← back</button>
+        </div>
+        {err && <div className="msg err">{err}</div>}
+        {!err && games === null && <div className="msg">Loading…</div>}
+        {games && games.length === 0 && <div className="msg">No games yet — finish a game while signed in.</div>}
+        {games && games.map(g => {
+          const opp = g.your_color === 'white'
+            ? (g.black_name || 'Anonymous') : (g.white_name || 'Anonymous');
+          const res = resultInfo(g);
+          return (
+            <div key={g.id} className="hist-row" onClick={() => onReplay(g)}>
+              <span className="hist-opp">
+                vs {opp} <span className="hist-date">as {g.your_color} · {g.moves.length} moves</span>
+              </span>
+              <span className="hist-date">{new Date(g.created_at).toLocaleDateString()}</span>
+              <span className={`hist-result ${res.cls}`}>{res.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Replay viewer ─────────────────────────────────────────────────────────────
+function Replay({ game, onBack }) {
+  const total = game.moves.length;
+  const [idx, setIdx] = useState(0);
+  const board = boardAfter(game.moves, idx);
+  const lastMove = idx > 0
+    ? { from: game.moves[idx - 1].from, to: game.moves[idx - 1].to }
+    : null;
+  const res = resultInfo(game);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight') setIdx(i => Math.min(total, i + 1));
+      if (e.key === 'ArrowLeft') setIdx(i => Math.max(0, i - 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [total]);
+
+  return (
+    <div className="game-wrap">
+      <div className="card player-row">
+        <span className="pname">
+          {game.white_name || 'Anonymous'} vs {game.black_name || 'Anonymous'}
+        </span>
+        <span className={`hist-result ${res.cls}`}>{res.label}</span>
+      </div>
+      <div className="board-area">
+        <Board board={board} myColor={game.your_color} turn={null} status="replay"
+          selected={null} legalMoves={[]} lastMove={lastMove} onSquareClick={() => {}} />
+      </div>
+      <div className="replay-controls">
+        <button className="replay-btn" disabled={idx === 0} onClick={() => setIdx(0)}>⏮</button>
+        <button className="replay-btn" disabled={idx === 0}
+          onClick={() => setIdx(i => Math.max(0, i - 1))}>◀</button>
+        <span className="replay-count">{idx} / {total}</span>
+        <button className="replay-btn" disabled={idx === total}
+          onClick={() => setIdx(i => Math.min(total, i + 1))}>▶</button>
+        <button className="replay-btn" disabled={idx === total}
+          onClick={() => setIdx(total)}>⏭</button>
+      </div>
+      <button className="linklike" onClick={onBack}>← back to my games</button>
+    </div>
+  );
+}
+
 // ── GameView ──────────────────────────────────────────────────────────────────
 function GameView({ myColor, turn, status, board, selected, legalMoves, lastMove,
-                    gameId, gameStarted, msg, onSquareClick, onNewGame, onCopy }) {
+                    gameId, gameStarted, msg, players, captured, user,
+                    onSquareClick, onNewGame, onCopy }) {
   const opponentColor = myColor === 'white' ? 'black' : 'white';
   const myTurn = turn === myColor;
   const gameOver = status === 'checkmate' || status === 'stalemate';
+
+  const oppName = (players && players[opponentColor]) || opponentColor;
+  const myName = (players && players[myColor]) || (user ? user.name : myColor);
+  const capScores = {
+    white: capScore(captured && captured.white),
+    black: capScore(captured && captured.black),
+  };
+  const advFor = (color) =>
+    Math.max(0, capScores[color] - capScores[color === 'white' ? 'black' : 'white']);
 
   const statusLabel = {
     waiting:   'Waiting for opponent…',
@@ -549,7 +801,11 @@ function GameView({ myColor, turn, status, board, selected, legalMoves, lastMove
       {/* opponent */}
       <div className={`card player-row ${!myTurn && gameStarted ? 'active' : ''}`}>
         <span className="turn-dot" />
-        <span className="pname">{opponentColor}</span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span className="pname">{oppName} <span className="ptag">({opponentColor})</span></span>
+          <CapturedRow pieces={captured && captured[opponentColor]}
+                       victimColor={myColor} adv={advFor(opponentColor)} />
+        </div>
         <span className="ptag">{opponentColor === 'white' ? '♔' : '♚'}</span>
       </div>
 
@@ -580,9 +836,11 @@ function GameView({ myColor, turn, status, board, selected, legalMoves, lastMove
       {/* you */}
       <div className={`card player-row ${myTurn && gameStarted ? 'active' : ''}`}>
         <span className="turn-dot" />
-        <span className="pname">
-          {myColor} <span className="ptag">(you)</span>
-        </span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span className="pname">{myName} <span className="ptag">({myColor} — you)</span></span>
+          <CapturedRow pieces={captured && captured[myColor]}
+                       victimColor={opponentColor} adv={advFor(myColor)} />
+        </div>
         <span className="ptag">{myColor === 'white' ? '♔' : '♚'}</span>
       </div>
 
@@ -620,6 +878,7 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  // phase: lobby | game | history | replay
   const [phase, setPhase] = useState('lobby');
   const [myColor, setMyColor]     = useState(null);
   const [gameId, setGameId]       = useState(null);
@@ -631,6 +890,24 @@ function App() {
   const [lastMove, setLastMove]   = useState(null);
   const [msg, setMsg]             = useState(null);
   const [gameStarted, setGameStarted] = useState(false);
+  const [players, setPlayers]     = useState(null);
+  const [captured, setCaptured]   = useState({ white: [], black: [] });
+
+  // auth
+  const [user, setUser]           = useState(null);
+  const [clientId, setClientId]   = useState(null);
+  const [replayGame, setReplayGame] = useState(null);
+
+  useEffect(() => {
+    fetch('/auth/config').then(r => r.json())
+      .then(d => setClientId(d.google_client_id)).catch(() => {});
+    fetch('/auth/me').then(r => r.json())
+      .then(d => setUser(d.user)).catch(() => {});
+  }, []);
+
+  const onLogout = useCallback(() => {
+    fetch('/auth/logout', { method: 'POST' }).then(() => setUser(null)).catch(() => {});
+  }, []);
 
   const wsRef = useRef(null);
   // stable refs so event handlers don't capture stale closures
@@ -665,6 +942,8 @@ function App() {
         setSelected(null);
         setLegalMoves([]);
         setLastMove(null);
+        setPlayers(null);
+        setCaptured({ white: [], black: [] });
         break;
 
       case 'state':
@@ -674,6 +953,8 @@ function App() {
         setStatus(m.status);
         setSelected(null);
         setLegalMoves([]);
+        if (m.players) setPlayers(m.players);
+        if (m.captured) setCaptured(m.captured);
         if (m.lastMove) setLastMove(m.lastMove);
         if (m.status === 'checkmate') {
           const winner = m.turn === 'white' ? 'Black' : 'White';
@@ -744,6 +1025,7 @@ function App() {
     setTurn(null); setStatus('waiting'); setBoard(EMPTY_BOARD);
     setSelected(null); setLegalMoves([]); setLastMove(null);
     setMsg(null); setGameStarted(false);
+    setPlayers(null); setCaptured({ white: [], black: [] });
   }, []);
   const onCopy = useCallback(() => {
     navigator.clipboard.writeText(gameId).then(() => showMsg('Copied!'));
@@ -764,21 +1046,39 @@ function App() {
             </span>
           )}
         </div>
-        <span className="livecount">
-          <span className={`live-dot ${connected ? '' : 'dim'}`} />
-          {connected ? 'connected' : 'offline'}
+        <span className="auth-box">
+          {user && (
+            <>
+              {user.picture && <img className="avatar" src={user.picture} alt="" referrerPolicy="no-referrer" />}
+              <span className="auth-name">{user.name}</span>
+              <button className="linklike" onClick={onLogout}>sign out</button>
+            </>
+          )}
+          <span className="livecount">
+            <span className={`live-dot ${connected ? '' : 'dim'}`} />
+            {connected ? 'connected' : 'offline'}
+          </span>
         </span>
       </header>
       <hr className="divider" />
 
-      {phase === 'lobby'
-        ? <Lobby onCreate={onCreate} onJoin={onJoin} msg={msg} />
-        : <GameView
-            myColor={myColor} turn={turn} status={status} board={board}
-            selected={selected} legalMoves={legalMoves} lastMove={lastMove}
-            gameId={gameId} gameStarted={gameStarted} msg={msg}
-            onSquareClick={onSquareClick} onNewGame={onNewGame} onCopy={onCopy} />
-      }
+      {phase === 'lobby' &&
+        <Lobby onCreate={onCreate} onJoin={onJoin} msg={msg}
+          user={user} clientId={clientId} onUser={setUser}
+          onAuthError={(e) => showMsg(e, true)}
+          onMyGames={() => setPhase('history')} />}
+      {phase === 'game' &&
+        <GameView
+          myColor={myColor} turn={turn} status={status} board={board}
+          selected={selected} legalMoves={legalMoves} lastMove={lastMove}
+          gameId={gameId} gameStarted={gameStarted} msg={msg}
+          players={players} captured={captured} user={user}
+          onSquareClick={onSquareClick} onNewGame={onNewGame} onCopy={onCopy} />}
+      {phase === 'history' &&
+        <MyGames onBack={() => setPhase('lobby')}
+          onReplay={(g) => { setReplayGame(g); setPhase('replay'); }} />}
+      {phase === 'replay' && replayGame &&
+        <Replay game={replayGame} onBack={() => setPhase('history')} />}
 
       <TweaksPanel tweaks={tweaks} setTweak={setTweak} />
     </>
