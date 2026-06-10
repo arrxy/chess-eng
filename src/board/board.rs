@@ -34,8 +34,14 @@ pub struct Board {
 
 impl Clone for Board {
     fn clone(&self) -> Self {
-        let board = self.board.iter()
-            .map(|row| row.iter().map(|cell| cell.as_ref().map(|p| p.clone_box())).collect())
+        let board = self
+            .board
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.as_ref().map(|p| p.clone_box()))
+                    .collect()
+            })
             .collect();
         Self {
             board,
@@ -47,9 +53,8 @@ impl Clone for Board {
 
 impl Board {
     pub fn new() -> Self {
-        let mut board: Vec<Vec<Option<Box<dyn Piece>>>> = (0..8)
-            .map(|_| (0..8).map(|_| None).collect())
-            .collect();
+        let mut board: Vec<Vec<Option<Box<dyn Piece>>>> =
+            (0..8).map(|_| (0..8).map(|_| None).collect()).collect();
 
         board[0][0] = Some(Box::new(Rook::new(Color::Black)));
         board[0][1] = Some(Box::new(Knight::new(Color::Black)));
@@ -136,7 +141,11 @@ impl Board {
 
         // castling: the king moves two files, the rook crosses over it
         if matches!(moved_type, PieceType::King) && (to.y as i8 - from.y as i8).abs() == 2 {
-            let (rook_from, rook_to) = if to.y > from.y { (7usize, 5usize) } else { (0usize, 3usize) };
+            let (rook_from, rook_to) = if to.y > from.y {
+                (7usize, 5usize)
+            } else {
+                (0usize, 3usize)
+            };
             let rook = self.board[from.x as usize][rook_from].take();
             self.board[from.x as usize][rook_to] = rook;
         }
@@ -145,13 +154,15 @@ impl Board {
 
         self.board[to.x as usize][to.y as usize] = piece;
 
-        self.en_passant_target = if matches!(moved_type, PieceType::Pawn)
-            && (to.x as i8 - from.x as i8).abs() == 2
-        {
-            Some(Position { x: (from.x + to.x) / 2, y: from.y })
-        } else {
-            None
-        };
+        self.en_passant_target =
+            if matches!(moved_type, PieceType::Pawn) && (to.x as i8 - from.x as i8).abs() == 2 {
+                Some(Position {
+                    x: (from.x + to.x) / 2,
+                    y: from.y,
+                })
+            } else {
+                None
+            };
 
         self.update_castling_rights(from, to);
 

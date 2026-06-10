@@ -1,10 +1,10 @@
+use crate::db::mongo::build_index;
+use crate::pieces::pieces::{Color, PieceType};
 use mongodb::{
-    bson::{oid::ObjectId, DateTime},
     IndexModel,
+    bson::{DateTime, oid::ObjectId},
 };
 use serde::{Deserialize, Serialize};
-use crate::pieces::pieces::{Color, PieceType};
-use crate::db::mongo::{build_index};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Move {

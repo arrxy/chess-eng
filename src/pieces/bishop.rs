@@ -34,12 +34,7 @@ impl Piece for Bishop {
     }
 
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
-        let dirs: [[i8; 2]; 4] = [
-            [1, 1],
-            [1, -1],
-            [-1, 1],
-            [-1, -1],
-        ];
+        let dirs: [[i8; 2]; 4] = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
 
         let mut possible_positions: Vec<Position> = Vec::new();
 

@@ -1,10 +1,10 @@
-use mongodb::{
-    bson::{oid::ObjectId, DateTime, doc},
-    IndexModel,
-};
-use mongo::{build_sparse_unique_index, build_unique_index};
-use serde::{Deserialize, Serialize};
 use crate::db::mongo;
+use mongo::{build_sparse_unique_index, build_unique_index};
+use mongodb::{
+    IndexModel,
+    bson::{DateTime, doc, oid::ObjectId},
+};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {
@@ -49,7 +49,7 @@ impl User {
             updated_at: now,
         }
     }
-    
+
     pub fn indexes() -> Vec<IndexModel> {
         vec![
             build_unique_index("google_id", "google_id_index"),

@@ -1,13 +1,13 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use mongodb::bson::DateTime;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
 
+use super::{AppState, GameSession, SessionUser, new_game_id, promotion_from_str, state_json};
 use crate::board::game::{Game, GameStatus};
 use crate::db::game_schema::{self, Move as MoveRecord};
 use crate::pieces::pieces::{Color, PieceType, Position};
-use super::{promotion_from_str, state_json, AppState, GameSession, SessionUser, new_game_id};
 
 fn persist_game(state: &AppState, doc: game_schema::Game) {
     let db = state.db.clone();
@@ -119,8 +119,10 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                 let to = Position { x: tx_, y: ty_ };
 
                                 // Look before the move so we can record the piece and any capture
-                                let piece = session.game.board().get_piece(from).map(|p| p.piece_type());
-                                let mut captured = session.game.board().get_piece(to).map(|p| p.piece_type());
+                                let piece =
+                                    session.game.board().get_piece(from).map(|p| p.piece_type());
+                                let mut captured =
+                                    session.game.board().get_piece(to).map(|p| p.piece_type());
 
                                 if session.game.make_move(from, to, promotion) {
                                     let moved_pawn = matches!(piece, Some(PieceType::Pawn));
@@ -261,8 +263,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                 }
                 if session.started && !session.persisted && session.has_signed_in_player() {
                     session.persisted = true;
-                    abandoned_doc =
-                        Some(session.to_game_doc(game_schema::GameStatus::Abandoned));
+                    abandoned_doc = Some(session.to_game_doc(game_schema::GameStatus::Abandoned));
                 }
             }
             games.retain(|_, s| s.white_tx.is_some() || s.black_tx.is_some());

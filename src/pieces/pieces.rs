@@ -1,16 +1,16 @@
-use crate::board::board::{Board};
+use crate::board::board::Board;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Position {
     pub x: u8,
-    pub y: u8
+    pub y: u8,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Color {
     White,
-    Black
+    Black,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +21,7 @@ pub enum PieceType {
     Rook,
     Bishop,
     Knight,
-    Pawn
+    Pawn,
 }
 pub trait Piece: Send {
     fn color(&self) -> Color;

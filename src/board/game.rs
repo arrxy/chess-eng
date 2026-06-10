@@ -58,7 +58,12 @@ impl Game {
         &self.black
     }
 
-    pub fn make_move(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> bool {
+    pub fn make_move(
+        &mut self,
+        from: Position,
+        to: Position,
+        promotion: Option<PieceType>,
+    ) -> bool {
         if !Board::in_bounds(from) || !Board::in_bounds(to) {
             return false;
         }
@@ -143,7 +148,8 @@ impl Game {
         moves
             .into_iter()
             .filter(|&to| {
-                self.board.apply_move(from, to)
+                self.board
+                    .apply_move(from, to)
                     .map_or(false, |b| !b.is_in_check(color))
             })
             .collect()
@@ -184,12 +190,15 @@ impl Game {
                 let from = Position { x: row, y: col };
                 if let Some(piece) = self.board.get_piece(from) {
                     if piece.color() == color {
-                        let has_legal = piece.possible_moves(from, &self.board)
-                            .into_iter()
-                            .any(|to| {
-                                self.board.apply_move(from, to)
-                                    .map_or(false, |b| !b.is_in_check(color))
-                            });
+                        let has_legal =
+                            piece
+                                .possible_moves(from, &self.board)
+                                .into_iter()
+                                .any(|to| {
+                                    self.board
+                                        .apply_move(from, to)
+                                        .map_or(false, |b| !b.is_in_check(color))
+                                });
                         if has_legal {
                             return true;
                         }
@@ -216,7 +225,10 @@ mod tests {
 
     fn mv(game: &mut Game, from: (u8, u8), to: (u8, u8)) -> bool {
         game.make_move(
-            Position { x: from.0, y: from.1 },
+            Position {
+                x: from.0,
+                y: from.1,
+            },
             Position { x: to.0, y: to.1 },
             None,
         )
