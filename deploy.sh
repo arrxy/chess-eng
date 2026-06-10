@@ -1,30 +1,30 @@
 #!/bin/bash
 set -e
 
-REMOTE_USER="root"
-REMOTE_HOST="167.172.153.128"
-REMOTE_REPO="/root/server/chess-eng"
-REMOTE_PATH="/opt/chess/chess"
-REMOTE_ENV="/opt/chess/.env"
-ENV_FILE=".env"
+REPO_DIR="/root/server/chess-eng"
+BINARY="/opt/chess/chess"
+ENV_SRC="$REPO_DIR/.env"
+ENV_DEST="/opt/chess/.env"
 
-echo "==> Copying .env to server..."
-scp "$ENV_FILE" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_ENV"
+echo "==> Pulling latest code..."
+cd "$REPO_DIR"
+git pull
 
-echo "==> Pushing code to server..."
-rsync -az --exclude target --exclude .git \
-    ./ "$REMOTE_USER@$REMOTE_HOST:$REMOTE_REPO/"
-
-echo "==> Building on server..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "cd $REMOTE_REPO && cargo build --release"
+echo "==> Building release..."
+cargo build --release
 
 echo "==> Stopping service..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "systemctl stop chess"
+systemctl stop chess
 
 echo "==> Installing binary..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "cp $REMOTE_REPO/target/release/chess $REMOTE_PATH && chmod +x $REMOTE_PATH"
+cp target/release/chess "$BINARY"
+chmod +x "$BINARY"
+
+echo "==> Copying .env..."
+cp "$ENV_SRC" "$ENV_DEST"
 
 echo "==> Starting service..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "systemctl start chess && systemctl status chess --no-pager"
+systemctl start chess
+systemctl status chess --no-pager
 
 echo "==> Done. Live at https://chess.aritro.me"
