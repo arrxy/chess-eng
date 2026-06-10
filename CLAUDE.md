@@ -14,7 +14,7 @@ cargo fmt            # format
 cd frontend && npm run dev                    # frontend dev server with HMR, proxies API/WS to :3000
 ```
 
-Engine tests live in a `#[cfg(test)]` module in `src/board/game.rs`; run with `cargo test`.
+Engine tests live in `#[cfg(test)]` modules under `src/board/`; run with `cargo test`. `src/board/famous_games.rs` replays 331 real games (World Championship matches 1886–2023 plus classic mating miniatures) from `tests/fixtures/famous_games.tsv` through the engine: each SAN move is resolved with the engine's own move generation, capture/check/mate markers are asserted after every move, and the final position must match python-chess's replay exactly. The fixture was generated and independently validated with python-chess from pgnmentor.com PGNs.
 
 **Environment:** copy `.env.example` to `.env`. `MONGODB_URI`/`MONGODB_DB` are required at startup; `GOOGLE_CLIENT_ID` is optional (Google login is hidden when unset).
 
