@@ -125,7 +125,11 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
                                     "type": "state",
                                     "board": brd,
                                     "turn": turn,
-                                    "status": status
+                                    "status": status,
+                                    "lastMove": {
+                                        "from": { "x": fx, "y": fy },
+                                        "to":   { "x": tx_, "y": ty_ }
+                                    }
                                 })
                                 .to_string();
                                 let _ = tx.send(Message::Text(state_msg.clone()));

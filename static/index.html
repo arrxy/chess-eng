@@ -15,12 +15,12 @@
   --line: #d3ccbe;
   --accent: #3b6ea5;
   --card: #fffefa;
-  --sq-light: #efe9dc;
-  --sq-dark: #d6cbb6;
+  --sq-light: #f0ebe1;
+  --sq-dark: #c9b49a;
   --hand: 'Kalam', cursive;
   --disp: 'Architects Daughter', cursive;
 }
-[data-theme="grey"] { --sq-light: #ececec; --sq-dark: #c6c6c6; }
+[data-theme="grey"] { --sq-light: #e8e8e8; --sq-dark: #b0b0b0; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -84,18 +84,17 @@ body {
   grid-template-rows: repeat(8, 1fr);
   container-type: size; overflow: hidden;
 }
-[data-sketch="on"] .board-frame { border: 1.7px solid var(--ink); border-radius: 6px 4px 7px 5px; overflow: hidden; }
-[data-sketch="off"] .board-frame { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-.board-frame.in-check-ring { box-shadow: 0 0 0 3px #c85a3a; }
+.board-frame { border-radius: 6px; overflow: hidden; box-shadow: 0 2px 14px rgba(0,0,0,.13); }
+.board-frame.in-check-ring { box-shadow: 0 0 0 3px #c85a3a, 0 2px 14px rgba(0,0,0,.13); }
 .sq {
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; position: relative; transition: background .07s;
 }
 .sq.l { background: var(--sq-light); }
 .sq.d { background: var(--sq-dark); }
-.sq.selected { background: #a8d080 !important; }
-.sq.last-move { background: color-mix(in oklab, var(--sq-light) 50%, #c9c25a) !important; }
-.sq.d.last-move { background: color-mix(in oklab, var(--sq-dark) 50%, #b8b248) !important; }
+.sq.selected { background: #9bc96d !important; }
+.sq.last-move { background: color-mix(in oklab, var(--sq-light) 40%, #c8c058) !important; }
+.sq.d.last-move { background: color-mix(in oklab, var(--sq-dark) 40%, #b8b050) !important; }
 .sq.legal-dot::after {
   content: ''; position: absolute;
   width: 30%; height: 30%; border-radius: 50%;
@@ -106,9 +105,26 @@ body {
   box-shadow: inset 0 0 0 4px rgba(44,42,39,.22); pointer-events: none;
 }
 .sq.in-check { background: #c85a3a !important; }
-.pc { font-size: 9.2cqw; line-height: 1; user-select: none; pointer-events: none; position: relative; z-index: 1; }
-.pc.w { color: #f7f4ee; text-shadow: 0 0 1px rgba(0,0,0,.65), 0 1px 1px rgba(0,0,0,.25); }
-.pc.b { color: #23211d; }
+.pc { font-size: 12cqw; line-height: 1; user-select: none; pointer-events: none; position: relative; z-index: 1; }
+.pc.w { color: #fff; -webkit-text-stroke: 1.5px rgba(0,0,0,.75); }
+.pc.b { color: #1a1816; -webkit-text-stroke: 0; }
+@keyframes pc-slide {
+  from { transform: var(--pc-from, none); }
+  to   { transform: none; }
+}
+.pc.sliding { animation: pc-slide 0.2s ease-out both; }
+
+/* advantage bar */
+.board-with-bar {
+  display: flex; gap: 10px; align-items: stretch; width: 100%;
+}
+.adv-bar {
+  flex: 0 0 8px; border-radius: 4px; overflow: hidden;
+  display: flex; flex-direction: column; min-height: 0;
+}
+.adv-b { background: #1a1816; transition: height .4s ease; }
+.adv-w { background: #ddd8d0; transition: height .4s ease; }
+.board-wrap { flex: 1; min-width: 0; }
 
 /* lobby */
 .lobby-wrap {
@@ -296,7 +312,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Piece glyphs ─────────────────────────────────────────────────────────────
 const GLYPH = {
-  white: { king:'♔', queen:'♕', rook:'♖', bishop:'♗', knight:'♘', pawn:'♙' },
+  white: { king:'♚', queen:'♛', rook:'♜', bishop:'♝', knight:'♞', pawn:'♟' },
   black: { king:'♚', queen:'♛', rook:'♜', bishop:'♝', knight:'♞', pawn:'♟' },
 };
 
@@ -401,10 +417,41 @@ function TweaksPanel({ tweaks, setTweak }) {
   );
 }
 
+// ── Material advantage ────────────────────────────────────────────────────────
+const PIECE_VALUE = { queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, king: 0 };
+function materialAdv(board) {
+  let b = 0, w = 0;
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (!p) continue;
+      if (p.color === 'black') b += PIECE_VALUE[p.type] || 0;
+      else w += PIECE_VALUE[p.type] || 0;
+    }
+  const total = b + w || 1;
+  return { bPct: (b / total) * 100, wPct: (w / total) * 100 };
+}
+
 // ── Board component ───────────────────────────────────────────────────────────
 function Board({ board, myColor, turn, status, selected, legalMoves, lastMove, onSquareClick }) {
   const flip = myColor === 'black';
   const legalSet = new Set((legalMoves || []).map(m => `${m.x},${m.y}`));
+
+  // Compute animation info synchronously during render when lastMove changes
+  const prevLastMoveRef = React.useRef(null);
+  const animRef = React.useRef(null);
+  if (lastMove !== prevLastMoveRef.current) {
+    prevLastMoveRef.current = lastMove;
+    if (lastMove) {
+      const { from, to } = lastMove;
+      const fvr = flip ? 7 - from.x : from.x;
+      const fvc = flip ? 7 - from.y : from.y;
+      const tvr = flip ? 7 - to.x   : to.x;
+      const tvc = flip ? 7 - to.y   : to.y;
+      animRef.current = { key: `${to.x},${to.y}`, dx: fvc - tvc, dy: fvr - tvr };
+    }
+  }
+  const anim = animRef.current;
 
   let kingCheckSq = null;
   if (status === 'check' || status === 'checkmate') {
@@ -436,10 +483,14 @@ function Board({ board, myColor, turn, status, selected, legalMoves, lastMove, o
       }
       if (legalSet.has(key)) cls += piece ? ' legal-capture' : ' legal-dot';
 
+      const isAnim = anim && anim.key === key;
       cells.push(
-        <div key={key} className={cls} onClick={() => onSquareClick(row, col)}>
+        <div key={key} className={cls}
+             style={isAnim ? { zIndex: 100 } : undefined}
+             onClick={() => onSquareClick(row, col)}>
           {piece && (
-            <span className={'pc ' + (piece.color === 'white' ? 'w' : 'b')}>
+            <span className={`pc ${piece.color === 'white' ? 'w' : 'b'}${isAnim ? ' sliding' : ''}`}
+                  style={isAnim ? { '--pc-from': `translate(${anim.dx * 12.5}cqw, ${anim.dy * 12.5}cqw)` } : undefined}>
               {GLYPH[piece.color][piece.type]}
             </span>
           )}
@@ -513,9 +564,17 @@ function GameView({ myColor, turn, status, board, selected, legalMoves, lastMove
 
       {/* board */}
       <div className="board-area">
-        <Board board={board} myColor={myColor} turn={turn} status={status}
-          selected={selected} legalMoves={legalMoves} lastMove={lastMove}
-          onSquareClick={onSquareClick} />
+        <div className="board-with-bar">
+          <div className="adv-bar">
+            <div className="adv-b" style={{height: `${materialAdv(board).bPct}%`}} />
+            <div className="adv-w" style={{height: `${materialAdv(board).wPct}%`}} />
+          </div>
+          <div className="board-wrap">
+            <Board board={board} myColor={myColor} turn={turn} status={status}
+              selected={selected} legalMoves={legalMoves} lastMove={lastMove}
+              onSquareClick={onSquareClick} />
+          </div>
+        </div>
       </div>
 
       {/* you */}
