@@ -14,7 +14,7 @@ cargo fmt            # format
 cd frontend && npm run dev                    # frontend dev server with HMR, proxies API/WS to :3000
 ```
 
-No tests are currently defined. Add them with `#[cfg(test)]` modules and run with `cargo test`.
+Engine tests live in `#[cfg(test)]` modules under `src/board/`; run with `cargo test`. `src/board/famous_games.rs` replays 331 real games (World Championship matches 1886–2023 plus classic mating miniatures) from `tests/fixtures/famous_games.tsv` through the engine: each SAN move is resolved with the engine's own move generation, capture/check/mate markers are asserted after every move, and the final position must match python-chess's replay exactly. The fixture was generated and independently validated with python-chess from pgnmentor.com PGNs.
 
 **Environment:** copy `.env.example` to `.env`. `MONGODB_URI`/`MONGODB_DB` are required at startup; `GOOGLE_CLIENT_ID` is optional (Google login is hidden when unset).
 
@@ -72,7 +72,7 @@ fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
 |-----------|---------|
 | Client → | `{"type":"create"}` |
 | Client → | `{"type":"join","game_id":"…"}` |
-| Client → | `{"type":"move","from":{"x":…,"y":…},"to":{…}}` |
+| Client → | `{"type":"move","from":{"x":…,"y":…},"to":{…},"promotion":"queen"\|"rook"\|"bishop"\|"knight"?}` |
 | Client → | `{"type":"moves","x":…,"y":…}` |
 | Server → | `{"type":"joined","game_id":"…","color":"white"\|"black"}` |
 | Server → | `{"type":"state","board":[[…]],"turn":…,"status":…,"players":{"white":name\|null,"black":…},"captured":{"white":[piece,…],"black":[…]},"lastMove":{…}?}` |
@@ -82,4 +82,6 @@ fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
 
 The board in `state` messages is an 8×8 JSON array (row 0 = black back rank, row 7 = white back rank). Each cell is `null` or `{"type":"pawn"|…,"color":"white"|"black"}`. `captured.white` lists the pieces white has taken; the frontend renders them on each player row with a +N material score and also uses them for the replay viewer reached via "my games".
 
-**Not yet implemented:** en passant, castling, pawn promotion, reconnecting to an in-progress game.
+**Special moves:** castling, en passant, and pawn promotion are implemented. `Board` carries `en_passant_target` and `CastlingRights`; castling move generation lives in `Board::castling_moves` (kept out of `King::possible_moves` to avoid recursion through `is_attacked`). `Game::make_move` takes an optional promotion `PieceType` (defaults to queen); the client sends it in the `move` message after picking from the promotion overlay.
+
+**Not yet implemented:** reconnecting to an in-progress game.

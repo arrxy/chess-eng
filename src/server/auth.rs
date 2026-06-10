@@ -303,6 +303,7 @@ pub async fn my_games(State(state): State<AppState>, headers: HeaderMap) -> Resp
                         "from": { "x": m.from_x, "y": m.from_y },
                         "to": { "x": m.to_x, "y": m.to_y },
                         "captured": m.captured.map(piece_type_str),
+                        "promotion": m.promotion.map(piece_type_str),
                     })
                 })
                 .collect();

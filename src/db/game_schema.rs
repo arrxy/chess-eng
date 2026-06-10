@@ -22,6 +22,10 @@ pub struct Move {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captured: Option<PieceType>,
 
+    // set when a pawn reached the last rank and became this piece
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion: Option<PieceType>,
+
     pub created_at: DateTime,
 }
 

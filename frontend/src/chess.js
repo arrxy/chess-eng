@@ -28,13 +28,25 @@ export function startBoard() {
   return b;
 }
 
-// The engine has no castling/en passant/promotion yet, so replaying a move is
-// just "piece slides from -> to" with any capture implied by the target square.
+// Replays a move list, mirroring the server's special-move mechanics:
+// en passant, castling rook hops, and pawn promotion.
 export function boardAfter(moves, n) {
   const b = startBoard();
   for (let i = 0; i < n; i++) {
     const m = moves[i];
-    b[m.to.x][m.to.y] = b[m.from.x][m.from.y];
+    const piece = b[m.from.x][m.from.y];
+    if (!piece) continue;
+    // en passant: pawn capture landing on an empty square
+    if (piece.type === 'pawn' && m.from.y !== m.to.y && !b[m.to.x][m.to.y]) {
+      b[m.from.x][m.to.y] = null;
+    }
+    // castling: king moves two files, rook crosses over
+    if (piece.type === 'king' && Math.abs(m.to.y - m.from.y) === 2) {
+      const [rookFrom, rookTo] = m.to.y > m.from.y ? [7, 5] : [0, 3];
+      b[m.from.x][rookTo] = b[m.from.x][rookFrom];
+      b[m.from.x][rookFrom] = null;
+    }
+    b[m.to.x][m.to.y] = m.promotion ? { ...piece, type: m.promotion } : piece;
     b[m.from.x][m.from.y] = null;
   }
   return b;
