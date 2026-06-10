@@ -373,9 +373,11 @@ body {
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ── Piece glyphs ─────────────────────────────────────────────────────────────
+// U+FE0E forces text presentation — without it iOS renders ♟ as an emoji,
+// ignoring the CSS color that distinguishes white pieces from black.
 const GLYPH = {
-  white: { king:'♚', queen:'♛', rook:'♜', bishop:'♝', knight:'♞', pawn:'♟' },
-  black: { king:'♚', queen:'♛', rook:'♜', bishop:'♝', knight:'♞', pawn:'♟' },
+  white: { king:'♚︎', queen:'♛︎', rook:'♜︎', bishop:'♝︎', knight:'♞︎', pawn:'♟︎' },
+  black: { king:'♚︎', queen:'♛︎', rook:'♜︎', bishop:'♝︎', knight:'♞︎', pawn:'♟︎' },
 };
 
 // ── TweaksPanel (adapted from design) ────────────────────────────────────────
