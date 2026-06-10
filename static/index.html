@@ -33,10 +33,10 @@ body {
 
 /* top bar */
 .topbar {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 20px; padding: 22px 30px 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 20px; padding: 22px 30px 12px; flex-wrap: nowrap;
 }
-.brand { display: flex; align-items: baseline; gap: 12px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .brand-name {
   font-family: var(--disp); font-size: 34px; line-height: 1;
   color: var(--ink); letter-spacing: .5px;
@@ -292,7 +292,7 @@ body {
 .twk-open-btn:hover { opacity: .85; }
 
 /* auth */
-.auth-box { display: flex; align-items: center; gap: 10px; }
+.auth-box { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .avatar { width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--line); }
 .auth-name { font-size: 15px; }
 .linklike {
@@ -342,11 +342,22 @@ body {
 .replay-count { font-family: var(--disp); font-size: 14px; color: var(--ink-soft); min-width: 64px; text-align: center; }
 
 @media (max-width: 520px) {
-  .topbar { padding: 16px 16px 10px; }
-  .divider { margin: 0 16px; }
-  .game-wrap { padding: 12px 16px 50px; }
-  .lobby-wrap { padding: 0 16px; }
-  .lobby-card { padding: 22px 20px; }
+  .topbar { padding: 12px 14px 8px; gap: 8px; align-items: center; }
+  .brand-name { font-size: 22px; }
+  .brand-sub { font-size: 13px; }
+  .games-live { font-size: 11px; padding: 2px 7px; gap: 4px; }
+  .auth-box { gap: 6px; }
+  .auth-name { display: none; }
+  .avatar { width: 26px; height: 26px; }
+  /* hide "connected"/"offline" label, keep only the dot */
+  .livecount { font-size: 0; gap: 0; }
+  .divider { margin: 0 12px; }
+  .game-wrap { padding: 10px 12px 50px; }
+  .board-area { max-width: 100%; }
+  .player-row { max-width: 100%; }
+  .share-strip { max-width: 100%; }
+  .lobby-wrap { padding: 0 14px; }
+  .lobby-card { padding: 18px 16px; }
 }
 </style>
 </head>
