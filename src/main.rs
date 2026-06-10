@@ -2,6 +2,7 @@ mod board;
 mod pieces;
 mod server;
 mod db;
+mod repository;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, State},

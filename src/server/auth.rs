@@ -136,7 +136,7 @@ fn user_json(user: &SessionUser) -> Value {
     json!({ "name": user.name, "picture": user.picture })
 }
 
-fn error_response(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
