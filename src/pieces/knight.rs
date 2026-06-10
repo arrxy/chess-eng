@@ -1,6 +1,5 @@
 use crate::board::board::Board;
 use crate::pieces::pieces::{Color, Piece, PieceType, Position};
-use std::cmp::PartialEq;
 
 pub struct Knight {
     color: Color,
@@ -19,7 +18,7 @@ impl Piece for Knight {
     fn piece_type(&self) -> PieceType {
         PieceType::Knight
     }
-    fn can_move(&self, from: Position, to: Position) -> bool {
+    fn can_move(&self, _from: Position, to: Position) -> bool {
         if to.x > 7 || to.y > 7 {
             return false;
         }

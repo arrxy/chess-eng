@@ -1,12 +1,11 @@
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures_util::TryStreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use mongodb::bson::oid::ObjectId;
 use mongodb::bson::{DateTime, doc};
 use mongodb::options::ReturnDocument;
 use serde::Deserialize;
@@ -15,9 +14,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-pub(crate) use super::{AppState, SessionUser, color_str, piece_type_str};
-use crate::db::game_schema::{Game, GameStatus, Move};
-use crate::db::mongo::Db;
+pub(crate) use super::{AppState, SessionUser};
 use crate::db::session_schema::Session;
 use crate::db::user_schema::User;
 

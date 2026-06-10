@@ -18,7 +18,7 @@ impl Piece for King {
     fn piece_type(&self) -> PieceType {
         PieceType::King
     }
-    fn can_move(&self, from: Position, to: Position) -> bool {
+    fn can_move(&self, _from: Position, to: Position) -> bool {
         if to.x > 7 || to.y > 7 {
             return false;
         }

@@ -1,5 +1,4 @@
 use crate::db::session_schema::Session;
-use mongodb::bson::oid::ObjectId;
 use mongodb::{Collection, bson::doc};
 
 #[derive(Clone)]
