@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-cargo build          # compile
+cd frontend && npm install && npm run build   # build frontend into static/dist (required before cargo build)
+cargo build          # compile (embeds static/dist via include_str!)
 cargo run            # start server at http://localhost:3000
 cargo check          # fast compile check
 cargo clippy         # lint
 cargo fmt            # format
+cd frontend && npm run dev                    # frontend dev server with HMR, proxies API/WS to :3000
 ```
 
 No tests are currently defined. Add them with `#[cfg(test)]` modules and run with `cargo test`.
@@ -33,6 +35,7 @@ This is a Rust chess engine (Rust edition 2024) with an Axum server, MongoDB per
   - `mongo.rs` — `connect_db()`, `Db` struct (typed `users`/`games`/`sessions` collections), index builders
   - `user_schema.rs` / `game_schema.rs` / `session_schema.rs` — document structs + their indexes
 - `src/server/` — Axum state, WebSocket handler (`ws.rs`), auth + history HTTP handlers (`auth.rs`)
+- `frontend/` — Vite + React app: `src/App.jsx` (state + WebSocket logic), `src/chess.js` (glyphs, board helpers), `src/styles.css`, `src/components/` (Board, GameView, Lobby, MyGames, Replay, CapturedRow, GoogleButton, TweaksPanel). `npm run build` emits `static/dist/` with fixed filenames (`index.html`, `app.js`, `app.css`) which the Rust binary embeds via `include_str!` — so the frontend must be built before `cargo build`. `static/dist/` is gitignored.
 
 **`Piece` trait** (in `pieces/pieces.rs`):
 ```rust
@@ -50,7 +53,7 @@ fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position>;
 
 ## Server / frontend
 
-`cargo run` starts an Axum HTTP+WebSocket server on `:3000`. `GET /` serves the embedded single-page frontend (`static/index.html` via `include_str!`). `GET /ws` is the WebSocket endpoint.
+`cargo run` starts an Axum HTTP+WebSocket server on `:3000`. `GET /`, `/app.js`, and `/app.css` serve the embedded Vite-built frontend (`static/dist/*` via `include_str!`). `GET /ws` is the WebSocket endpoint.
 
 **In-memory state** (`src/server/`):
 - `AppState` — games map + `Arc<Db>` + optional `GoogleVerifier`, shared across all connections
