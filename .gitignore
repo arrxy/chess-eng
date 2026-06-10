@@ -1,3 +1,5 @@
 /target
 .env
 .playwright-mcp/
+frontend/node_modules/
+static/dist/

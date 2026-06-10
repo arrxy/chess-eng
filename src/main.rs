@@ -5,7 +5,7 @@ mod db;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, State},
-    http::HeaderMap,
+    http::{header, HeaderMap},
     response::IntoResponse,
     routing::{get, post},
     Router,
@@ -35,6 +35,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(serve_html))
+        .route("/app.js", get(serve_js))
+        .route("/app.css", get(serve_css))
         .route("/ws", get(ws_upgrade))
         .route("/stats", get(stats))
         .route("/auth/config", get(auth::auth_config))
@@ -49,8 +51,24 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+// The frontend is built by Vite (`cd frontend && npm run build`) into
+// static/dist/ with fixed filenames, then embedded into the binary here.
 async fn serve_html() -> impl IntoResponse {
-    axum::response::Html(include_str!("../static/index.html"))
+    axum::response::Html(include_str!("../static/dist/index.html"))
+}
+
+async fn serve_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../static/dist/app.js"),
+    )
+}
+
+async fn serve_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css")],
+        include_str!("../static/dist/app.css"),
+    )
 }
 
 async fn stats(State(state): State<AppState>) -> impl IntoResponse {

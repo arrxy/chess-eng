@@ -10,7 +10,13 @@ echo "==> Pulling latest code..."
 cd "$REPO_DIR"
 git pull
 
+echo "==> Building frontend..."
+cd "$REPO_DIR/frontend"
+npm install --no-audit --no-fund
+npm run build
+
 echo "==> Building release..."
+cd "$REPO_DIR"
 cargo build --release
 
 echo "==> Stopping service..."
