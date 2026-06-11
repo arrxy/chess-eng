@@ -1,5 +1,7 @@
 use crate::db::game_schema::{Game, GameStatus, Move};
-use crate::server::{auth, AppState};
+use crate::server;
+use crate::server::auth::user_from_headers;
+use crate::server::{AppState, auth};
 use crate::server::{color_str, piece_type_str};
 use axum::Json;
 use axum::extract::{Query, State, WebSocketUpgrade};
@@ -8,8 +10,6 @@ use axum::response::{IntoResponse, Response};
 use mongodb::bson::oid::ObjectId;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use crate::server;
-use crate::server::auth::user_from_headers;
 
 #[derive(Debug, Deserialize)]
 pub struct GamesQuery {
@@ -32,17 +32,13 @@ pub async fn my_games(
     {
         Ok(games) => games,
         Err(_) => {
-            return auth::error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "database error",
-            );
+            return auth::error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
         }
     };
 
     let response = games_response(&games, user.id);
     Json(response).into_response()
 }
-
 
 pub(crate) async fn stats(State(state): State<AppState>) -> impl IntoResponse {
     let count = state.games.lock().unwrap().len();

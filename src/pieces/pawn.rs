@@ -19,47 +19,6 @@ impl Piece for Pawn {
     fn piece_type(&self) -> PieceType {
         PieceType::Pawn
     }
-
-    fn can_move(&self, from: Position, to: Position) -> bool {
-        if to.x > 7 || to.y > 7 {
-            return false;
-        }
-
-        let direction: i8 = match self.color {
-            Color::White => -1,
-            Color::Black => 1,
-        };
-
-        let start_row: u8 = match self.color {
-            Color::White => 6,
-            Color::Black => 1,
-        };
-
-        let dx = to.x as i8 - from.x as i8;
-        let dy = to.y as i8 - from.y as i8;
-
-        // one step forward
-        if dy == 0 && dx == direction {
-            return true;
-        }
-
-        // two steps forward from starting row
-        if dy == 0 && from.x == start_row && dx == 2 * direction {
-            return true;
-        }
-
-        // diagonal capture shape
-        if dy.abs() == 1 && dx == direction {
-            return true;
-        }
-
-        false
-    }
-
-    fn clone_box(&self) -> Box<dyn Piece> {
-        Box::new(Self { color: self.color })
-    }
-
     fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
         let mut possible_positions: Vec<Position> = vec![];
 
@@ -133,5 +92,9 @@ impl Piece for Pawn {
         }
 
         possible_positions
+    }
+
+    fn clone_box(&self) -> Box<dyn Piece> {
+        Box::new(Self { color: self.color })
     }
 }
