@@ -1,5 +1,5 @@
 use crate::board::board::Board;
-use crate::pieces::pieces::{Color, Piece, PieceType, Position};
+use crate::pieces::pieces::{Color, DIRS_KNIGHT, Piece, PieceType, Position, step_moves};
 
 pub struct Knight {
     color: Color,
@@ -18,46 +18,11 @@ impl Piece for Knight {
     fn piece_type(&self) -> PieceType {
         PieceType::Knight
     }
-    fn can_move(&self, _from: Position, to: Position) -> bool {
-        if to.x > 7 || to.y > 7 {
-            return false;
-        }
-        false
+    fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
+        step_moves(&from, &DIRS_KNIGHT, board, self.color)
     }
 
     fn clone_box(&self) -> Box<dyn Piece> {
         Box::new(Self { color: self.color })
-    }
-
-    fn possible_moves(&self, from: Position, board: &Board) -> Vec<Position> {
-        let dirs: [[i8; 2]; 8] = [
-            [-2, -1],
-            [-2, 1],
-            [2, -1],
-            [2, 1],
-            [1, -2],
-            [1, 2],
-            [-1, -2],
-            [-1, 2],
-        ];
-        let mut possible_positions: Vec<Position> = vec![];
-        for [dx, dy] in dirs {
-            let nx = from.x as i8 + dx;
-            let ny = from.y as i8 + dy;
-            if nx < 0 || ny < 0 || nx > 7 || ny > 7 {
-                continue;
-            }
-            let target = &board.board[nx as usize][ny as usize];
-            if let Some(piece) = target {
-                if piece.color() == self.color {
-                    continue;
-                }
-            }
-            possible_positions.push(Position {
-                x: nx as u8,
-                y: ny as u8,
-            })
-        }
-        possible_positions
     }
 }
