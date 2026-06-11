@@ -4,10 +4,9 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use futures_util::TryStreamExt;
+
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use mongodb::bson::{DateTime, doc};
-use mongodb::options::ReturnDocument;
+use mongodb::bson::{doc};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -15,8 +14,6 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub(crate) use super::{AppState, SessionUser};
-use crate::db::session_schema::Session;
-use crate::db::user_schema::User;
 
 const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const SESSION_COOKIE: &str = "session";
@@ -170,35 +167,19 @@ pub async fn auth_google(State(state): State<AppState>, Json(body): Json<GoogleL
         Err(e) => return error_response(StatusCode::UNAUTHORIZED, &e),
     };
 
-    let now = DateTime::now();
-    let mut set = doc! { "updated_at": now };
-    if let Some(v) = &claims.name {
-        set.insert("name", v);
-    }
-    if let Some(v) = &claims.picture {
-        set.insert("picture", v);
-    }
-    if let Some(v) = &claims.email {
-        set.insert("email", v);
-    }
-
-    let user: Option<User> = match state
-        .db
-        .users
-        .find_one_and_update(
-            doc! { "google_id": &claims.sub },
-            doc! { "$set": set, "$setOnInsert": { "created_at": now } },
-        )
-        .upsert(true)
-        .return_document(ReturnDocument::After)
-        .await
-    {
+    let user = match state.user_repository.upsert_google_user(
+        &claims.sub,
+        claims.email.clone(),
+        claims.name.clone(),
+        claims.picture.clone(),
+    ).await {
         Ok(u) => u,
         Err(e) => {
             eprintln!("user upsert failed: {e}");
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
         }
     };
+
     let Some(user) = user else {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
     };
@@ -208,11 +189,9 @@ pub async fn auth_google(State(state): State<AppState>, Json(body): Json<GoogleL
 
     let token = Uuid::new_v4().to_string();
     if let Err(e) = state
-        .db
-        .sessions
-        .insert_one(Session::new(token.clone(), user_id))
-        .await
-    {
+        .session_repository
+        .create_session(&token, user_id)
+        .await {
         eprintln!("session insert failed: {e}");
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
     }
@@ -242,7 +221,7 @@ pub async fn auth_me(State(state): State<AppState>, headers: HeaderMap) -> Json<
 
 pub async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(token) = session_token(&headers) {
-        let _ = state.db.sessions.delete_one(doc! { "token": token }).await;
+        let _ = state.session_repository.delete_session_by_token(&token).await;
     }
     let cookie = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     ([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response()
