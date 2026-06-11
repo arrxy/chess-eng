@@ -1,5 +1,5 @@
 use crate::board::board::Board;
-use crate::pieces::pieces::{Color, DIRS_4, DIRS_DIAG, Piece, PieceType, Position, sliding_moves};
+use crate::pieces::pieces::{Color, DIRS_4, Piece, PieceType, Position, sliding_moves};
 
 pub struct Rook {
     color: Color,

@@ -1,5 +1,5 @@
 use crate::board::board::Board;
-use crate::pieces::pieces::{Color, DIRS_8, DIRS_KNIGHT, Piece, PieceType, Position, step_moves};
+use crate::pieces::pieces::{Color, DIRS_8, Piece, PieceType, Position, step_moves};
 
 pub struct King {
     color: Color,
