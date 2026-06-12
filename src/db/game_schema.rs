@@ -54,8 +54,9 @@ pub struct Game {
     pub updated_at: DateTime,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GameStatus {
+    InProgress,
     WhiteWon,
     BlackWon,
     Draw,

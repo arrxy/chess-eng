@@ -68,6 +68,7 @@ impl AppState {
         redis: RedisPool,
         redis_url: String,
         server_id: String,
+        game_repository: GameRepository,
     ) -> Self {
         Self {
             games: Arc::new(Mutex::new(HashMap::new())),
@@ -76,7 +77,7 @@ impl AppState {
             server_id,
             user_repository: UserRepository::new(db.users.clone()),
             session_repository: SessionRepository::new(db.sessions.clone()),
-            game_repository: GameRepository::new(db.games.clone()),
+            game_repository,
             db: Arc::new(db),
             google: google.map(Arc::new),
         }

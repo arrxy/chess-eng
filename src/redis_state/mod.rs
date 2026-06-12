@@ -2,8 +2,9 @@ pub mod hydrate;
 pub mod lock;
 pub mod pool;
 pub mod pubsub;
+pub mod stream;
 
-use crate::db::game_schema::Move as MoveRecord;
+use crate::db::game_schema::{GameStatus, Move as MoveRecord};
 use crate::pieces::pieces::{Color, PieceType};
 use bb8_redis::redis::AsyncCommands;
 use pool::RedisPool;
@@ -42,6 +43,11 @@ pub struct RedisGameState {
     pub persisted: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// MongoDB ObjectId hex — set when both players have joined.
+    pub mongo_game_id: Option<String>,
+    /// Set when the game ends but before the Mongo doc is finalized.
+    /// Lets the peer monitor finalize the game if this server dies first.
+    pub final_status: Option<GameStatus>,
 }
 
 fn game_key(game_id: &str) -> String {

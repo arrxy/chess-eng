@@ -1,5 +1,6 @@
 use crate::db::mongo::Db;
 use crate::redis_state::pool::RedisPool;
+use crate::repository::game_repository::GameRepository;
 use crate::server::{AppState, auth};
 use crate::service::frontend_service;
 use crate::service::game_service;
@@ -15,10 +16,11 @@ pub async fn route(
     redis: RedisPool,
     redis_url: String,
     server_id: String,
+    game_repository: GameRepository,
 ) {
     let _ = dotenvy::dotenv();
 
-    let state = AppState::new(db, google, redis, redis_url, server_id);
+    let state = AppState::new(db, google, redis, redis_url, server_id, game_repository);
     let app = Router::new()
         .route("/", get(frontend_service::serve_html))
         .route("/app.js", get(frontend_service::serve_js))

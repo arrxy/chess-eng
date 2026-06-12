@@ -104,6 +104,8 @@ pub fn game_to_redis(
         persisted: existing.persisted,
         created_at_ms: existing.created_at_ms,
         updated_at_ms: DateTime::now().timestamp_millis(),
+        mongo_game_id: existing.mongo_game_id.clone(),
+        final_status: existing.final_status,
     }
 }
 
@@ -143,6 +145,8 @@ pub fn new_redis_state(game: &Game, white_user: Option<&SessionUser>) -> RedisGa
         persisted: false,
         created_at_ms: now,
         updated_at_ms: now,
+        mongo_game_id: None,
+        final_status: None,
     }
 }
 

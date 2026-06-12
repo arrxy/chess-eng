@@ -1,7 +1,7 @@
-use crate::db::game_schema::Game;
+use crate::db::game_schema::{Game, GameStatus, Move};
 use futures_util::TryStreamExt;
-use mongodb::bson::oid::ObjectId;
-use mongodb::{Collection, bson::doc};
+use mongodb::bson::{DateTime, doc, oid::ObjectId, to_bson};
+use mongodb::{Collection, bson};
 
 #[derive(Clone)]
 pub struct GameRepository {
@@ -24,6 +24,7 @@ impl GameRepository {
         let cursor = self
             .games
             .find(doc! {
+                "status": { "$ne": "InProgress" },
                 "$or": [
                     { "white_user_id": user_id },
                     { "black_user_id": user_id },
@@ -35,5 +36,51 @@ impl GameRepository {
             .await?;
         let sessions = cursor.try_collect().await?;
         Ok(sessions)
+    }
+
+    /// Insert a new in-progress game document; returns its assigned ObjectId.
+    pub async fn create_in_progress(&self, doc: Game) -> mongodb::error::Result<ObjectId> {
+        let result = self.games.insert_one(doc).await?;
+        Ok(result.inserted_id.as_object_id().unwrap())
+    }
+
+    /// Append move batches to multiple game documents concurrently.
+    pub async fn bulk_push_moves(
+        &self,
+        batches: Vec<(ObjectId, Vec<Move>)>,
+    ) -> mongodb::error::Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let mut futs = Vec::with_capacity(batches.len());
+        for (id, moves) in batches {
+            let moves_bson = to_bson(&moves).unwrap_or(bson::Bson::Array(vec![]));
+            let col = self.games.clone();
+            futs.push(async move {
+                col.update_one(
+                    doc! { "_id": id },
+                    doc! { "$push": { "moves": { "$each": moves_bson } } },
+                )
+                .await
+            });
+        }
+        futures_util::future::try_join_all(futs).await?;
+        Ok(())
+    }
+
+    /// Set the final status and updated_at on a finished game.
+    pub async fn finalize_game(
+        &self,
+        id: ObjectId,
+        status: GameStatus,
+    ) -> mongodb::error::Result<()> {
+        let status_bson = to_bson(&status).unwrap_or(bson::Bson::Null);
+        self.games
+            .update_one(
+                doc! { "_id": id },
+                doc! { "$set": { "status": status_bson, "updated_at": DateTime::now() } },
+            )
+            .await?;
+        Ok(())
     }
 }
