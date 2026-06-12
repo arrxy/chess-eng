@@ -1,0 +1,11 @@
+target/
+.env
+.env.example
+.git/
+.claude/
+.idea/
+.playwright-mcp/
+design/
+frontend/node_modules/
+static/dist/
+*.md
