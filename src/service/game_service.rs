@@ -86,6 +86,7 @@ fn your_color(game: &Game, user_id: ObjectId) -> &'static str {
 
 fn game_result_str(status: GameStatus) -> &'static str {
     match status {
+        GameStatus::InProgress => "in_progress",
         GameStatus::WhiteWon => "white_won",
         GameStatus::BlackWon => "black_won",
         GameStatus::Draw => "draw",

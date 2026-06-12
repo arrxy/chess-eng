@@ -1,21 +1,87 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use mongodb::bson::DateTime;
+use mongodb::bson::{DateTime, oid::ObjectId};
 use serde_json::{Value, json};
+use std::str::FromStr;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio_util::sync::CancellationToken;
 
-use super::{AppState, GameSession, SessionUser, new_game_id, promotion_from_str, state_json};
-use crate::board::game::{Game, GameStatus};
+use super::{AppState, LocalGameSession, SessionUser, color_str, new_game_id, piece_type_str, promotion_from_str};
+use crate::board::game::GameStatus;
 use crate::db::game_schema::{self, Move as MoveRecord};
 use crate::pieces::pieces::{Color, PieceType, Position};
+use crate::redis_state::{
+    self, RedisGameState, TTL_ACTIVE, TTL_DISCONNECTED, TTL_PERSISTED, TTL_WAITING,
+    hydrate::{board_json_from_redis, game_to_redis, new_redis_state, redis_to_game},
+    lock::RedisLock,
+    stream,
+};
 
-fn persist_game(state: &AppState, doc: game_schema::Game) {
-    let db = state.db.clone();
-    tokio::spawn(async move {
-        if let Err(e) = db.games.insert_one(doc).await {
-            eprintln!("failed to persist game: {e}");
-        }
+fn has_signed_in_player(s: &RedisGameState) -> bool {
+    s.white_user_id.is_some() || s.black_user_id.is_some()
+}
+
+fn captured_json(pieces: &[PieceType]) -> serde_json::Value {
+    json!(pieces.iter().map(|&p| piece_type_str(p)).collect::<Vec<_>>())
+}
+
+fn players_json(s: &RedisGameState) -> serde_json::Value {
+    json!({
+        "white": s.white_user_name,
+        "black": s.black_user_name,
+    })
+}
+
+fn state_json_from_redis(
+    rs: &RedisGameState,
+    game_status: &str,
+    last_move: Option<Value>,
+    server_id: &str,
+) -> String {
+    let mut msg = json!({
+        "type": "state",
+        "board": board_json_from_redis(rs),
+        "turn": color_str(rs.turn),
+        "status": game_status,
+        "players": players_json(rs),
+        "captured": {
+            "white": captured_json(&rs.captured_by_white),
+            "black": captured_json(&rs.captured_by_black),
+        },
+        "delivered_by": server_id,
     });
+    if let Some(lm) = last_move {
+        msg["lastMove"] = lm;
+    }
+    msg.to_string()
+}
+
+fn game_status_str(rs: &RedisGameState) -> &'static str {
+    let game = redis_to_game(rs);
+    match game.status() {
+        GameStatus::Ongoing => "ongoing",
+        GameStatus::Check => "check",
+        GameStatus::Checkmate => "checkmate",
+        GameStatus::Stalemate => "stalemate",
+    }
+}
+
+async fn sadd_server_game(state: &AppState, game_id: &str) {
+    use bb8_redis::redis::AsyncCommands;
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: Result<i64, _> = conn
+            .sadd(format!("server:{}:games", state.server_id), game_id)
+            .await;
+    }
+}
+
+async fn srem_server_game(state: &AppState, game_id: &str) {
+    use bb8_redis::redis::AsyncCommands;
+    if let Ok(mut conn) = state.redis.get().await {
+        let _: Result<i64, _> = conn
+            .srem(format!("server:{}:games", state.server_id), game_id)
+            .await;
+    }
 }
 
 pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<SessionUser>) {
@@ -45,14 +111,41 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                 match v["type"].as_str().unwrap_or("") {
                     "create" => {
                         let gid = new_game_id();
-                        state.games.lock().unwrap().insert(
+                        let game = crate::board::game::Game::new();
+                        let rs = new_redis_state(&game, user.as_ref());
+
+                        if let Err(e) =
+                            redis_state::save_state(&state.redis, &gid, &rs, TTL_WAITING).await
+                        {
+                            eprintln!("create: save_state failed: {e}");
+                            continue;
+                        }
+
+                        sadd_server_game(&state, &gid).await;
+
+                        let cancel = CancellationToken::new();
+                        {
+                            let mut games = state.games.lock().unwrap();
+                            games.insert(
+                                gid.clone(),
+                                LocalGameSession::new_white(tx.clone(), cancel.clone()),
+                            );
+                        }
+
+                        tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
+                            state.redis_url.clone(),
                             gid.clone(),
-                            GameSession::new(Game::new(), tx.clone(), user.clone()),
-                        );
+                            tx.clone(),
+                            cancel,
+                            state.server_id.clone(),
+                        ));
+
                         game_id = Some(gid.clone());
                         my_color = Some(Color::White);
                         let _ = tx.send(Message::Text(
-                            json!({"type":"joined","game_id":gid,"color":"white"}).to_string(),
+                            json!({"type":"joined","game_id":gid,"color":"white"})
+                                .to_string()
+                                .into(),
                         ));
                     }
 
@@ -61,36 +154,149 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             Some(id) => id.to_string(),
                             None => continue,
                         };
-                        let mut games = state.games.lock().unwrap();
-                        match games.get_mut(&gid) {
+
+                        let rs_opt =
+                            match redis_state::load_state(&state.redis, &gid).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    eprintln!("join: load_state failed: {e}");
+                                    continue;
+                                }
+                            };
+
+                        let rs = match rs_opt {
                             None => {
                                 let _ = tx.send(Message::Text(
-                                    json!({"type":"error","message":"game not found"}).to_string(),
+                                    json!({"type":"error","message":"game not found"})
+                                        .to_string()
+                                        .into(),
                                 ));
+                                continue;
                             }
-                            Some(s) if s.black_tx.is_some() => {
-                                let _ = tx.send(Message::Text(
-                                    json!({"type":"error","message":"game is full"}).to_string(),
-                                ));
-                            }
-                            Some(session) => {
-                                session.black_tx = Some(tx.clone());
-                                session.black_user = user.clone();
-                                session.started = true;
-                                game_id = Some(gid.clone());
-                                my_color = Some(Color::Black);
+                            Some(s) => s,
+                        };
 
-                                let state_msg = state_json(session, None);
-                                let _ = tx.send(Message::Text(
-                                    json!({"type":"joined","game_id":&gid,"color":"black"})
-                                        .to_string(),
-                                ));
-                                let _ = tx.send(Message::Text(state_msg.clone()));
-                                if let Some(wtx) = &session.white_tx {
-                                    let _ = wtx.send(Message::Text(state_msg));
+                        if rs.black_user_id.is_some()
+                            || state
+                                .games
+                                .lock()
+                                .unwrap()
+                                .get(&gid)
+                                .map_or(false, |s| s.black_tx.is_some())
+                        {
+                            let _ = tx.send(Message::Text(
+                                json!({"type":"error","message":"game is full"})
+                                    .to_string()
+                                    .into(),
+                            ));
+                            continue;
+                        }
+
+                        let lock =
+                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    eprintln!("join: lock failed: {e}");
+                                    continue;
+                                }
+                            };
+
+                        let mut rs =
+                            match redis_state::load_state(&state.redis, &gid).await {
+                                Ok(Some(s)) => s,
+                                _ => {
+                                    lock.release().await;
+                                    continue;
+                                }
+                            };
+
+                        rs.started = true;
+                        if let Some(u) = &user {
+                            rs.black_user_id = Some(u.id.to_hex());
+                            rs.black_user_name = Some(u.name.clone());
+                        }
+
+                        // Create the Mongo game document now that both players are present.
+                        let mongo_id = if has_signed_in_player(&rs) {
+                            let doc = game_schema::Game {
+                                id: None,
+                                white_user_id: rs
+                                    .white_user_id
+                                    .as_deref()
+                                    .and_then(|h| ObjectId::from_str(h).ok()),
+                                black_user_id: rs
+                                    .black_user_id
+                                    .as_deref()
+                                    .and_then(|h| ObjectId::from_str(h).ok()),
+                                white_name: rs.white_user_name.clone(),
+                                black_name: rs.black_user_name.clone(),
+                                moves: vec![],
+                                status: game_schema::GameStatus::InProgress,
+                                created_at: DateTime::from_millis(rs.created_at_ms),
+                                updated_at: DateTime::now(),
+                            };
+                            match state.game_repository.create_in_progress(doc).await {
+                                Ok(id) => {
+                                    rs.mongo_game_id = Some(id.to_hex());
+                                    Some(id)
+                                }
+                                Err(e) => {
+                                    eprintln!("join: create_in_progress failed: {e}");
+                                    None
                                 }
                             }
+                        } else {
+                            None
+                        };
+                        let _ = mongo_id; // used via rs.mongo_game_id
+
+                        if let Err(e) =
+                            redis_state::save_state(&state.redis, &gid, &rs, TTL_ACTIVE).await
+                        {
+                            eprintln!("join: save_state failed: {e}");
+                            lock.release().await;
+                            continue;
                         }
+                        lock.release().await;
+
+                        sadd_server_game(&state, &gid).await;
+
+                        let cancel = CancellationToken::new();
+                        {
+                            let mut games = state.games.lock().unwrap();
+                            let session =
+                                games.entry(gid.clone()).or_insert_with(|| LocalGameSession {
+                                    white_tx: None,
+                                    black_tx: None,
+                                    white_cancel: None,
+                                    black_cancel: None,
+                                });
+                            session.black_tx = Some(tx.clone());
+                            session.black_cancel = Some(cancel.clone());
+                        }
+
+                        tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
+                            state.redis_url.clone(),
+                            gid.clone(),
+                            tx.clone(),
+                            cancel,
+                            state.server_id.clone(),
+                        ));
+
+                        game_id = Some(gid.clone());
+                        my_color = Some(Color::Black);
+
+                        let status = game_status_str(&rs);
+                        let state_msg =
+                            state_json_from_redis(&rs, status, None, &state.server_id);
+
+                        let _ = tx.send(Message::Text(
+                            json!({"type":"joined","game_id":&gid,"color":"black"})
+                                .to_string()
+                                .into(),
+                        ));
+                        let _ = tx.send(Message::Text(state_msg.clone().into()));
+                        publish(&state, &gid, &state_msg).await;
                     }
 
                     "move" => {
@@ -104,105 +310,178 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let ty_ = v["to"]["y"].as_u64().unwrap_or(0) as u8;
                         let promotion = v["promotion"].as_str().and_then(promotion_from_str);
 
-                        let mut finished_doc: Option<game_schema::Game> = None;
-                        {
-                            let mut games = state.games.lock().unwrap();
-                            if let Some(session) = games.get_mut(&gid) {
-                                if session.game.current_turn() != color {
-                                    let _ = tx.send(Message::Text(
-                                        json!({"type":"error","message":"not your turn"})
-                                            .to_string(),
-                                    ));
+                        let lock =
+                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    eprintln!("move: lock failed: {e}");
                                     continue;
                                 }
-                                let from = Position { x: fx, y: fy };
-                                let to = Position { x: tx_, y: ty_ };
+                            };
 
-                                // Look before the move so we can record the piece and any capture
-                                let piece =
-                                    session.game.board().get_piece(from).map(|p| p.piece_type());
-                                let mut captured =
-                                    session.game.board().get_piece(to).map(|p| p.piece_type());
+                        let mut rs =
+                            match redis_state::load_state(&state.redis, &gid).await {
+                                Ok(Some(s)) => s,
+                                _ => {
+                                    lock.release().await;
+                                    continue;
+                                }
+                            };
 
-                                if session.game.make_move(from, to, promotion) {
-                                    let moved_pawn = matches!(piece, Some(PieceType::Pawn));
-                                    // en passant: a pawn capture that lands on an empty square
-                                    if captured.is_none() && moved_pawn && fy != ty_ {
-                                        captured = Some(PieceType::Pawn);
-                                    }
-                                    let last_rank = match color {
-                                        Color::White => 0,
-                                        Color::Black => 7,
-                                    };
-                                    let promoted = if moved_pawn && tx_ == last_rank {
-                                        Some(promotion.unwrap_or(PieceType::Queen))
-                                    } else {
-                                        None
-                                    };
-                                    if let Some(piece) = piece {
-                                        session.moves.push(MoveRecord {
-                                            color,
-                                            piece,
-                                            from_x: fx as usize,
-                                            from_y: fy as usize,
-                                            to_x: tx_ as usize,
-                                            to_y: ty_ as usize,
-                                            captured,
-                                            promotion: promoted,
-                                            created_at: DateTime::now(),
-                                        });
-                                    }
-                                    if let Some(taken) = captured {
-                                        match color {
-                                            Color::White => session.captured_by_white.push(taken),
-                                            Color::Black => session.captured_by_black.push(taken),
-                                        }
-                                    }
+                        if rs.turn != color {
+                            lock.release().await;
+                            let _ = tx.send(Message::Text(
+                                json!({"type":"error","message":"not your turn"})
+                                    .to_string()
+                                    .into(),
+                            ));
+                            continue;
+                        }
 
-                                    let state_msg = state_json(
-                                        session,
-                                        Some(json!({
-                                            "from": { "x": fx, "y": fy },
-                                            "to":   { "x": tx_, "y": ty_ }
-                                        })),
-                                    );
-                                    let _ = tx.send(Message::Text(state_msg.clone()));
-                                    let other = match color {
-                                        Color::White => &session.black_tx,
-                                        Color::Black => &session.white_tx,
-                                    };
-                                    if let Some(otx) = other {
-                                        let _ = otx.send(Message::Text(state_msg));
-                                    }
+                        let mut game = redis_to_game(&rs);
+                        let from = Position { x: fx, y: fy };
+                        let to = Position { x: tx_, y: ty_ };
 
-                                    let final_status = match session.game.status() {
-                                        // turn already switched: the side to move is the loser
-                                        GameStatus::Checkmate => Some(match color {
-                                            Color::White => game_schema::GameStatus::WhiteWon,
-                                            Color::Black => game_schema::GameStatus::BlackWon,
-                                        }),
-                                        GameStatus::Stalemate => {
-                                            Some(game_schema::GameStatus::Draw)
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(status) = final_status {
-                                        if !session.persisted && session.has_signed_in_player() {
-                                            session.persisted = true;
-                                            finished_doc = Some(session.to_game_doc(status));
-                                        }
-                                    }
-                                } else {
-                                    let _ = tx.send(Message::Text(
-                                        json!({"type":"error","message":"invalid move"})
-                                            .to_string(),
-                                    ));
+                        let piece = game.board().get_piece(from).map(|p| p.piece_type());
+                        let mut captured =
+                            game.board().get_piece(to).map(|p| p.piece_type());
+
+                        if !game.make_move(from, to, promotion) {
+                            lock.release().await;
+                            let _ = tx.send(Message::Text(
+                                json!({"type":"error","message":"invalid move"})
+                                    .to_string()
+                                    .into(),
+                            ));
+                            continue;
+                        }
+
+                        let moved_pawn = matches!(piece, Some(PieceType::Pawn));
+                        if captured.is_none() && moved_pawn && fy != ty_ {
+                            captured = Some(PieceType::Pawn);
+                        }
+                        let last_rank =
+                            match color { Color::White => 0, Color::Black => 7 };
+                        let promoted = if moved_pawn && tx_ == last_rank {
+                            Some(promotion.unwrap_or(PieceType::Queen))
+                        } else {
+                            None
+                        };
+
+                        let move_record = piece.map(|pt| MoveRecord {
+                            color,
+                            piece: pt,
+                            from_x: fx as usize,
+                            from_y: fy as usize,
+                            to_x: tx_ as usize,
+                            to_y: ty_ as usize,
+                            captured,
+                            promotion: promoted,
+                            created_at: DateTime::now(),
+                        });
+
+                        if let Some(taken) = captured {
+                            match color {
+                                Color::White => rs.captured_by_white.push(taken),
+                                Color::Black => rs.captured_by_black.push(taken),
+                            }
+                        }
+
+                        rs = game_to_redis(&game, None, None, &rs);
+
+                        let game_end = match game.status() {
+                            GameStatus::Checkmate => Some(match color {
+                                Color::White => game_schema::GameStatus::WhiteWon,
+                                Color::Black => game_schema::GameStatus::BlackWon,
+                            }),
+                            GameStatus::Stalemate => Some(game_schema::GameStatus::Draw),
+                            _ => None,
+                        };
+
+                        let mongo_id = rs
+                            .mongo_game_id
+                            .as_deref()
+                            .and_then(|h| ObjectId::from_str(h).ok());
+
+                        if let Some(final_status) = game_end {
+                            // Mark final_status in Redis so peer monitor can finalize if
+                            // this server dies between here and the Mongo calls below.
+                            rs.final_status = Some(final_status);
+                            let _ = redis_state::save_state(
+                                &state.redis, &gid, &rs, TTL_PERSISTED,
+                            )
+                            .await;
+                            lock.release().await;
+
+                            // Synchronously write last move + finalize Mongo.
+                            if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
+                                let _ = state
+                                    .game_repository
+                                    .bulk_push_moves(vec![(id, vec![mr])])
+                                    .await;
+                                let _ = state
+                                    .game_repository
+                                    .finalize_game(id, final_status)
+                                    .await;
+                            }
+                            rs.final_status = None;
+                            let _ = redis_state::save_state(
+                                &state.redis, &gid, &rs, TTL_PERSISTED,
+                            )
+                            .await;
+                        } else {
+                            let _ = redis_state::save_state(
+                                &state.redis, &gid, &rs, TTL_ACTIVE,
+                            )
+                            .await;
+                            lock.release().await;
+
+                            // Non-final move: push to stream for batch flush.
+                            if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
+                                if let Err(e) = stream::xadd_move(
+                                    &state.redis,
+                                    &gid,
+                                    &id.to_hex(),
+                                    &mr,
+                                )
+                                .await
+                                {
+                                    eprintln!("move: xadd_move failed: {e}");
                                 }
                             }
                         }
-                        if let Some(doc) = finished_doc {
-                            persist_game(&state, doc);
+
+                        let status_str = match game.status() {
+                            GameStatus::Ongoing => "ongoing",
+                            GameStatus::Check => "check",
+                            GameStatus::Checkmate => "checkmate",
+                            GameStatus::Stalemate => "stalemate",
+                        };
+                        let last_move_val = Some(json!({
+                            "from": {"x": fx, "y": fy},
+                            "to":   {"x": tx_, "y": ty_}
+                        }));
+                        let state_msg = state_json_from_redis(
+                            &rs,
+                            status_str,
+                            last_move_val,
+                            &state.server_id,
+                        );
+
+                        {
+                            let games = state.games.lock().unwrap();
+                            if let Some(session) = games.get(&gid) {
+                                if let Some(wtx) = &session.white_tx {
+                                    let _ =
+                                        wtx.send(Message::Text(state_msg.clone().into()));
+                                }
+                                if let Some(btx) = &session.black_tx {
+                                    let _ =
+                                        btx.send(Message::Text(state_msg.clone().into()));
+                                }
+                            }
                         }
+                        publish(&state, &gid, &state_msg).await;
                     }
 
                     "moves" => {
@@ -213,63 +492,206 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let x = v["x"].as_u64().unwrap_or(0) as u8;
                         let y = v["y"].as_u64().unwrap_or(0) as u8;
 
-                        let games = state.games.lock().unwrap();
-                        if let Some(session) = games.get(&gid) {
-                            if session.game.current_turn() != color {
+                        let rs = match redis_state::load_state(&state.redis, &gid).await {
+                            Ok(Some(s)) => s,
+                            _ => continue,
+                        };
+
+                        if rs.turn != color {
+                            let _ = tx.send(Message::Text(
+                                json!({"type":"possible_moves","moves":[]})
+                                    .to_string()
+                                    .into(),
+                            ));
+                            continue;
+                        }
+
+                        let game = redis_to_game(&rs);
+                        let moves: Vec<Value> = game
+                            .possible_moves_from(Position { x, y })
+                            .iter()
+                            .map(|p| json!({"x": p.x, "y": p.y}))
+                            .collect();
+                        let _ = tx.send(Message::Text(
+                            json!({"type":"possible_moves","moves":moves})
+                                .to_string()
+                                .into(),
+                        ));
+                    }
+
+                    "reconnect" => {
+                        let gid = match v["game_id"].as_str() {
+                            Some(id) => id.to_string(),
+                            None => continue,
+                        };
+                        let color_str_val = match v["color"].as_str() {
+                            Some(c) => c.to_string(),
+                            None => continue,
+                        };
+                        let reconnect_color = match color_str_val.as_str() {
+                            "white" => Color::White,
+                            "black" => Color::Black,
+                            _ => continue,
+                        };
+
+                        let rs = match redis_state::load_state(&state.redis, &gid).await {
+                            Ok(Some(s)) => s,
+                            _ => {
                                 let _ = tx.send(Message::Text(
-                                    json!({"type":"possible_moves","moves":[]}).to_string(),
+                                    json!({"type":"error","message":"game not found or expired"})
+                                        .to_string()
+                                        .into(),
                                 ));
                                 continue;
                             }
-                            let moves: Vec<Value> = session
-                                .game
-                                .possible_moves_from(Position { x, y })
-                                .iter()
-                                .map(|p| json!({"x": p.x, "y": p.y}))
-                                .collect();
+                        };
+
+                        let user_id_hex = user.as_ref().map(|u| u.id.to_hex());
+                        let expected_id = match reconnect_color {
+                            Color::White => rs.white_user_id.clone(),
+                            Color::Black => rs.black_user_id.clone(),
+                        };
+                        if user_id_hex.is_none() || user_id_hex != expected_id {
                             let _ = tx.send(Message::Text(
-                                json!({"type":"possible_moves","moves":moves}).to_string(),
+                                json!({"type":"error","message":"unauthorized"})
+                                    .to_string()
+                                    .into(),
                             ));
+                            continue;
+                        }
+
+                        let cancel = CancellationToken::new();
+                        {
+                            let mut games = state.games.lock().unwrap();
+                            let session =
+                                games.entry(gid.clone()).or_insert_with(|| LocalGameSession {
+                                    white_tx: None,
+                                    black_tx: None,
+                                    white_cancel: None,
+                                    black_cancel: None,
+                                });
+                            match reconnect_color {
+                                Color::White => {
+                                    if let Some(old) = session.white_cancel.take() {
+                                        old.cancel();
+                                    }
+                                    session.white_tx = Some(tx.clone());
+                                    session.white_cancel = Some(cancel.clone());
+                                }
+                                Color::Black => {
+                                    if let Some(old) = session.black_cancel.take() {
+                                        old.cancel();
+                                    }
+                                    session.black_tx = Some(tx.clone());
+                                    session.black_cancel = Some(cancel.clone());
+                                }
+                            }
+                        }
+
+                        tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
+                            state.redis_url.clone(),
+                            gid.clone(),
+                            tx.clone(),
+                            cancel,
+                            state.server_id.clone(),
+                        ));
+
+                        sadd_server_game(&state, &gid).await;
+                        game_id = Some(gid.clone());
+                        my_color = Some(reconnect_color);
+
+                        let status = game_status_str(&rs);
+                        let state_msg =
+                            state_json_from_redis(&rs, status, None, &state.server_id);
+                        let _ = tx.send(Message::Text(
+                            json!({"type":"joined","game_id":&gid,"color":color_str_val})
+                                .to_string()
+                                .into(),
+                        ));
+                        let _ = tx.send(Message::Text(state_msg.into()));
+
+                        let notif = json!({"type":"opponent_reconnected"}).to_string();
+                        let games = state.games.lock().unwrap();
+                        if let Some(session) = games.get(&gid) {
+                            let other = match reconnect_color {
+                                Color::White => &session.black_tx,
+                                Color::Black => &session.white_tx,
+                            };
+                            if let Some(otx) = other {
+                                let _ = otx.send(Message::Text(notif.into()));
+                            }
                         }
                     }
 
                     _ => {}
                 }
             }
-            Some(Ok(_)) => {} // ignore binary / ping / pong
+            Some(Ok(_)) => {}
         }
     }
 
-    // Cleanup: remove sender slot, notify opponent, persist abandoned games
+    // Cleanup
     if let (Some(gid), Some(color)) = (game_id, my_color) {
-        let mut abandoned_doc: Option<game_schema::Game> = None;
         {
             let mut games = state.games.lock().unwrap();
             if let Some(session) = games.get_mut(&gid) {
                 let disconnect_msg = json!({"type":"opponent_disconnected"}).to_string();
                 match color {
                     Color::White => {
+                        if let Some(cancel) = session.white_cancel.take() {
+                            cancel.cancel();
+                        }
                         session.white_tx = None;
                         if let Some(btx) = &session.black_tx {
-                            let _ = btx.send(Message::Text(disconnect_msg));
+                            let _ = btx.send(Message::Text(disconnect_msg.into()));
                         }
                     }
                     Color::Black => {
+                        if let Some(cancel) = session.black_cancel.take() {
+                            cancel.cancel();
+                        }
                         session.black_tx = None;
                         if let Some(wtx) = &session.white_tx {
-                            let _ = wtx.send(Message::Text(disconnect_msg));
+                            let _ = wtx.send(Message::Text(disconnect_msg.into()));
                         }
                     }
-                }
-                if session.started && !session.persisted && session.has_signed_in_player() {
-                    session.persisted = true;
-                    abandoned_doc = Some(session.to_game_doc(game_schema::GameStatus::Abandoned));
                 }
             }
             games.retain(|_, s| s.white_tx.is_some() || s.black_tx.is_some());
         }
-        if let Some(doc) = abandoned_doc {
-            persist_game(&state, doc);
+
+        srem_server_game(&state, &gid).await;
+
+        // Persist abandoned game if needed.
+        if let Ok(Some(mut rs)) = redis_state::load_state(&state.redis, &gid).await {
+            if rs.started && !rs.persisted && has_signed_in_player(&rs) {
+                rs.final_status = Some(game_schema::GameStatus::Abandoned);
+                let _ = redis_state::save_state(&state.redis, &gid, &rs, TTL_DISCONNECTED)
+                    .await;
+                if let Some(mongo_id) = rs
+                    .mongo_game_id
+                    .as_deref()
+                    .and_then(|h| ObjectId::from_str(h).ok())
+                {
+                    let repo = state.game_repository.clone();
+                    tokio::spawn(async move {
+                        let _ = repo
+                            .finalize_game(mongo_id, game_schema::GameStatus::Abandoned)
+                            .await;
+                    });
+                }
+            } else {
+                let _ =
+                    redis_state::save_state(&state.redis, &gid, &rs, TTL_DISCONNECTED).await;
+            }
         }
+    }
+}
+
+async fn publish(state: &AppState, game_id: &str, msg: &str) {
+    use bb8_redis::redis::AsyncCommands;
+    if let Ok(mut conn) = state.redis.get().await {
+        let channel = crate::redis_state::pubsub_channel(game_id);
+        let _: Result<i64, _> = conn.publish(channel, msg).await;
     }
 }
