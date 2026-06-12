@@ -31,6 +31,16 @@ impl Game {
         }
     }
 
+    /// Reconstruct a Game from a pre-built Board and turn (used when loading from Redis).
+    pub fn from_parts(board: Board, turn: Color) -> Self {
+        Self {
+            board,
+            white: Player::new("white".to_string(), Color::White),
+            black: Player::new("black".to_string(), Color::Black),
+            turn,
+        }
+    }
+
     pub fn board(&self) -> &Board {
         &self.board
     }
