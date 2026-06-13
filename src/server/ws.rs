@@ -367,7 +367,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let mut outcome = Applied::Conflict;
                         for _ in 0..MAX_MOVE_RETRIES {
                             let (mut rs, version) =
-                                match redis_state::load_versioned(state.shards.pool(&gid), &gid).await {
+                                match redis_state::load_versioned(&state.redis, &gid).await {
                                     Ok(Some(v)) => v,
                                     Ok(None) => {
                                         outcome = Applied::NotFound;
@@ -460,7 +460,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                 TTL_INACTIVITY
                             };
 
-                            match redis_state::cas_save(state.shards.pool(&gid), &gid, &rs, version, ttl).await {
+                            match redis_state::cas_save(&state.redis, &gid, &rs, version, ttl).await {
                                 Ok(redis_state::CasResult::Updated) => {
                                     outcome = Applied::Ok { rs, status_str, move_record, game_end };
                                     break;
@@ -536,13 +536,13 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             // Mongo finalized — clear the recovery marker.
                             rs.final_status = None;
                             let _ = redis_state::save_state(
-                                state.shards.pool(&gid), &gid, &rs, TTL_PERSISTED,
+                                &state.redis, &gid, &rs, TTL_PERSISTED,
                             )
                             .await;
                         } else if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
                             // Non-final move: queue for batch flush to Mongo.
                             if let Err(e) =
-                                stream::xadd_move(state.shards.coord(), &gid, &id.to_hex(), &mr).await
+                                stream::xadd_move(&state.redis, &gid, &id.to_hex(), &mr).await
                             {
                                 eprintln!("move: xadd_move failed: {e}");
                             }
