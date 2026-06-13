@@ -1,14 +1,16 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use mongodb::bson::oid::ObjectId;
 use std::str::FromStr;
 
-use crate::redis_state::{self, pool::RedisPool, stream};
+use crate::redis_state::{self, shards::Shards, stream};
 use crate::repository::game_repository::GameRepository;
 
-pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
+pub async fn run(shards: Arc<Shards>, server_id: String, repo: GameRepository) {
+    let coord = shards.coord();
     loop {
         let entries = match stream::xreadgroup(
-            &pool,
+            coord,
             &server_id,
             stream::BATCH_SIZE,
             stream::FLUSH_INTERVAL_MS,
@@ -57,10 +59,10 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
         }
 
         // ACK then delete the flushed entries so the stream doesn't grow forever.
-        if let Err(e) = stream::xack(&pool, &ack_ids).await {
+        if let Err(e) = stream::xack(coord, &ack_ids).await {
             eprintln!("batch_flush: xack error: {e}");
         }
-        if let Err(e) = stream::xdel(&pool, &ack_ids).await {
+        if let Err(e) = stream::xdel(coord, &ack_ids).await {
             eprintln!("batch_flush: xdel error: {e}");
         }
 
@@ -70,14 +72,15 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
                 Ok(id) => id,
                 Err(_) => continue,
             };
-            if let Ok(Some(mut rs)) = redis_state::load_state(&pool, game_id).await {
+            let gpool = shards.pool(game_id);
+            if let Ok(Some(mut rs)) = redis_state::load_state(gpool, game_id).await {
                 if let Some(status) = rs.final_status {
                     if let Err(e) = repo.finalize_game(mongo_id, status).await {
                         eprintln!("batch_flush: finalize_game error: {e}");
                     } else {
                         rs.final_status = None;
                         let _ = redis_state::save_state(
-                            &pool,
+                            gpool,
                             game_id,
                             &rs,
                             redis_state::TTL_PERSISTED,

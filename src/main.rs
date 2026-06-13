@@ -11,6 +11,8 @@ mod service;
 use db::mongo::Db;
 use server::auth;
 use repository::game_repository::GameRepository;
+use redis_state::shards::Shards;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
@@ -21,21 +23,35 @@ async fn main() {
         eprintln!("warning: could not create MongoDB indexes (is mongod running?): {e}");
     }
 
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    // REDIS_URLS = comma-separated shard nodes; falls back to a single REDIS_URL.
+    let urls: Vec<String> = match std::env::var("REDIS_URLS") {
+        Ok(s) => s
+            .split(',')
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
+            .collect(),
+        Err(_) => vec![
+            std::env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+        ],
+    };
     let server_id = std::env::var("SERVER_ID")
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-    let redis = redis_state::pool::init_pool(&redis_url)
-        .await
-        .expect("failed to connect to Redis");
+    let shards = Arc::new(
+        Shards::new(urls)
+            .await
+            .expect("failed to connect to Redis shards"),
+    );
+    println!("connected to {} redis shard(s)", shards.len());
 
-    // Register this server and create the stream consumer group (idempotent).
+    // Register this server and create the stream consumer group (idempotent),
+    // both on the coordination node.
     {
         use bb8_redis::redis::AsyncCommands;
-        let mut conn = redis.get().await.expect("redis get conn");
+        let mut conn = shards.coord().get().await.expect("redis get conn");
         let _: Result<i64, _> = conn.sadd("known_servers", &server_id).await;
     }
-    redis_state::stream::ensure_consumer_group(&redis)
+    redis_state::stream::ensure_consumer_group(shards.coord())
         .await
         .expect("failed to create stream consumer group");
 
@@ -51,19 +67,19 @@ async fn main() {
 
     // Spawn background tasks.
     tokio::spawn(background::heartbeat::run(
-        redis.clone(),
+        shards.clone(),
         server_id.clone(),
         game_repository.clone(),
     ));
     tokio::spawn(background::batch_flush::run(
-        redis.clone(),
+        shards.clone(),
         server_id.clone(),
         game_repository.clone(),
     ));
     tokio::spawn(background::sweeper::run(
-        redis.clone(),
+        shards.clone(),
         game_repository.clone(),
     ));
 
-    routes::router::route(db, google, redis, redis_url, server_id, game_repository).await;
+    routes::router::route(db, google, shards, server_id, game_repository).await;
 }

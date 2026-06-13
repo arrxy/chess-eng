@@ -1,5 +1,5 @@
 use crate::db::mongo::Db;
-use crate::redis_state::pool::RedisPool;
+use crate::redis_state::shards::Shards;
 use crate::repository::game_repository::GameRepository;
 use crate::server::{AppState, auth};
 use crate::service::frontend_service;
@@ -9,18 +9,18 @@ use axum::{
     routing::{get, post},
 };
 use std::env;
+use std::sync::Arc;
 
 pub async fn route(
     db: Db,
     google: Option<auth::GoogleVerifier>,
-    redis: RedisPool,
-    redis_url: String,
+    shards: Arc<Shards>,
     server_id: String,
     game_repository: GameRepository,
 ) {
     let _ = dotenvy::dotenv();
 
-    let state = AppState::new(db, google, redis, redis_url, server_id, game_repository);
+    let state = AppState::new(db, google, shards, server_id, game_repository);
     let app = Router::new()
         .route("/", get(frontend_service::serve_html))
         .route("/app.js", get(frontend_service::serve_js))

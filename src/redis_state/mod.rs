@@ -2,6 +2,7 @@ pub mod hydrate;
 pub mod lock;
 pub mod pool;
 pub mod pubsub;
+pub mod shards;
 pub mod stream;
 
 use crate::db::game_schema::{GameStatus, Move as MoveRecord};

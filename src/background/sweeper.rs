@@ -1,7 +1,8 @@
 use mongodb::bson::DateTime;
+use std::sync::Arc;
 
 use crate::db::game_schema::GameStatus;
-use crate::redis_state::{self, INACTIVITY_SECS, pool::RedisPool};
+use crate::redis_state::{self, INACTIVITY_SECS, shards::Shards};
 use crate::repository::game_repository::GameRepository;
 
 const SWEEP_INTERVAL_SECS: u64 = 300; // every 5 minutes
@@ -9,7 +10,7 @@ const SWEEP_INTERVAL_SECS: u64 = 300; // every 5 minutes
 /// Periodically finalizes in-progress games that have seen no activity for
 /// `INACTIVITY_SECS` as Abandoned, and clears their Redis state so they can't
 /// be rejoined.
-pub async fn run(pool: RedisPool, repo: GameRepository) {
+pub async fn run(shards: Arc<Shards>, repo: GameRepository) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(SWEEP_INTERVAL_SECS)).await;
 
@@ -32,7 +33,7 @@ pub async fn run(pool: RedisPool, repo: GameRepository) {
                 continue;
             }
             if let Some(gid) = &game.game_id {
-                let _ = redis_state::delete_state(&pool, gid).await;
+                let _ = redis_state::delete_state(shards.pool(gid), gid).await;
             }
         }
     }
