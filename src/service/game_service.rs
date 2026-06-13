@@ -11,6 +11,13 @@ use mongodb::bson::oid::ObjectId;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// Bump manually on each release to verify what's deployed.
+const VERSION: &str = "1.0.0";
+
+pub(crate) async fn version(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({ "version": VERSION, "server_id": state.server_id }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GamesQuery {
     pub page: Option<u64>,
