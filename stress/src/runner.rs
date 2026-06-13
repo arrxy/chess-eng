@@ -45,6 +45,8 @@ pub struct GameConfig {
     pub max_plies: u32,
     pub move_timeout_ms: u64,
     pub seed: u64,
+    /// Optional handshake-rate limiter shared across all games in a stage.
+    pub gate: Option<std::sync::Arc<crate::ratelimit::RateGate>>,
 }
 
 fn ptype(t: PieceType) -> &'static str {
@@ -113,6 +115,9 @@ pub async fn run_game(cfg: &GameConfig, permit_drop: impl FnOnce()) -> GameResul
     let mut lats: Vec<u64> = Vec::new();
 
     // --- handshake -------------------------------------------------------
+    if let Some(g) = &cfg.gate {
+        g.acquire().await;
+    }
     let mut white = match client::connect(&cfg.url, cfg.cookie.as_deref()).await {
         Ok(w) => w,
         Err(e) => {
@@ -133,6 +138,9 @@ pub async fn run_game(cfg: &GameConfig, permit_drop: impl FnOnce()) -> GameResul
     };
     let gid = joined["game_id"].as_str().unwrap_or("").to_string();
 
+    if let Some(g) = &cfg.gate {
+        g.acquire().await;
+    }
     let mut black = match client::connect(&cfg.url, cfg.cookie.as_deref()).await {
         Ok(b) => b,
         Err(e) => {

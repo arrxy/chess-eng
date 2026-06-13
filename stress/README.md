@@ -43,7 +43,8 @@ Useful flags (`--help` for all):
 --url ws://localhost:3000/ws    target; use wss://chess.socketlab.tech/ws for the cluster
 --stages 1,50,200               override the ladder (smoke / quick runs)
 --max-plies 30                  plies per game
---connect-concurrency 500       throttle on simultaneous connection setups
+--connect-concurrency 500       cap on *simultaneous* connection setups (fd pressure)
+--connect-rate 0                cap on new connections per *second* (0 = unlimited)
 --fail-threshold 0.02           stage failure rate
 --max-games 200000              safety stop for the +100 loop
 --seed 1                        RNG base (per-game seed = base + index)
@@ -55,6 +56,14 @@ d(esync) | moves total + moves/sec | latency µs p50/p95/p99/max | wall`.
 
 ## Limitations / notes
 
+- **Load-balancer TLS-handshake limit:** a DO load balancer caps new SSL
+  connections/sec (≈500/node). Opening connections faster than that gets resets
+  (`c` failures), which has nothing to do with backend capacity.
+  `--connect-concurrency` only bounds *in-flight* handshakes — once the client is
+  fast, the per-second rate still blows past the limit. Use **`--connect-rate`**
+  (e.g. `--connect-rate 450`) to pace handshakes under the cap deterministically.
+  Bypassing the LB (point `--url` at a droplet's private `ws://10.x:3000/ws`) has
+  no such limit and needs no rate cap.
 - **File descriptors:** each game = 2 sockets. 10k games ≈ 20k+ fds — run
   `ulimit -n 100000` first.
 - **Ephemeral ports:** one client IP → one destination `ip:port` tops out near

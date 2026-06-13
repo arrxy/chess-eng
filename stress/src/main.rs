@@ -1,4 +1,5 @@
 mod client;
+mod ratelimit;
 mod runner;
 
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use clap::Parser;
 use hdrhistogram::Histogram;
 use tokio::sync::Semaphore;
 
+use ratelimit::RateGate;
 use runner::{FailReason, GameConfig, GameResult, run_game};
 
 #[derive(Parser, Debug, Clone)]
@@ -28,6 +30,12 @@ struct Args {
     /// Max concurrent connection setups (throttles connect storms).
     #[arg(long, default_value_t = 500)]
     connect_concurrency: usize,
+
+    /// Cap new connections to this many per second (0 = unlimited). Use this to
+    /// stay under a load balancer's TLS-handshake limit; unlike
+    /// --connect-concurrency it bounds the rate regardless of client speed.
+    #[arg(long, default_value_t = 0.0)]
+    connect_rate: f64,
 
     /// A stage fails if the non-consistency failure rate exceeds this.
     #[arg(long, default_value_t = 0.1)]
@@ -88,6 +96,7 @@ fn stage_sizes(custom: &Option<Vec<usize>>) -> Vec<usize> {
 
 async fn run_stage(args: &Args, size: usize, index_base: u64) -> StageOutcome {
     let sem = Arc::new(Semaphore::new(args.connect_concurrency));
+    let gate = (args.connect_rate > 0.0).then(|| Arc::new(RateGate::new(args.connect_rate)));
     let mut handles = Vec::with_capacity(size);
     let start = Instant::now();
 
@@ -99,6 +108,7 @@ async fn run_stage(args: &Args, size: usize, index_base: u64) -> StageOutcome {
             max_plies: args.max_plies,
             move_timeout_ms: args.move_timeout_ms,
             seed: index_base + i as u64,
+            gate: gate.clone(),
         };
         handles.push(tokio::spawn(async move {
             // Hold a permit only across connection setup.
@@ -185,9 +195,14 @@ fn print_stage(size: usize, o: &StageOutcome) {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    let rate_label = if args.connect_rate > 0.0 {
+        format!("{:.0}/s", args.connect_rate)
+    } else {
+        "unlimited".to_string()
+    };
     println!(
-        "target {} | max_plies {} | connect_concurrency {} | fail_threshold {}",
-        args.url, args.max_plies, args.connect_concurrency, args.fail_threshold
+        "target {} | max_plies {} | connect_concurrency {} | connect_rate {} | fail_threshold {}",
+        args.url, args.max_plies, args.connect_concurrency, rate_label, args.fail_threshold
     );
     println!("(X = consistency failures — always fatal)\n");
 
