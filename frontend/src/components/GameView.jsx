@@ -61,10 +61,12 @@ export default function GameView({ myColor, turn, status, board, selected, legal
       {/* board */}
       <div className="board-area">
         <div className="board-with-bar">
-          <div className="adv-bar">
-            <div className="adv-b" style={{ height: `${materialAdv(board).bPct}%` }} />
-            <div className="adv-w" style={{ height: `${materialAdv(board).wPct}%` }} />
-          </div>
+          {gameStarted && (
+            <div className="adv-bar">
+              <div className="adv-b" style={{ height: `${materialAdv(board).bPct}%` }} />
+              <div className="adv-w" style={{ height: `${materialAdv(board).wPct}%` }} />
+            </div>
+          )}
           <div className="board-wrap">
             <Board board={board} myColor={myColor} turn={turn} status={status}
               selected={selected} legalMoves={legalMoves} lastMove={lastMove}
@@ -99,6 +101,11 @@ export default function GameView({ myColor, turn, status, board, selected, legal
           <CapturedRow pieces={captured && captured[myColor]}
                        victimColor={opponentColor} adv={advFor(myColor)} />
         </div>
+        {canForfeit && (
+          <button className="btn btn-danger forfeit-inline" onClick={onForfeit}>
+            Forfeit
+          </button>
+        )}
         <span className="ptag">{myColor === 'white' ? '♔' : '♚'}</span>
       </div>
 
@@ -107,11 +114,6 @@ export default function GameView({ myColor, turn, status, board, selected, legal
       {msg && <div className={`msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
 
       <div className="game-actions">
-        {canForfeit && (
-          <button className="btn btn-danger" style={{ maxWidth: 200 }} onClick={onForfeit}>
-            Forfeit
-          </button>
-        )}
         {gameOver && (
           <button className="btn btn-primary" style={{ maxWidth: 200 }} onClick={onNewGame}>
             New Game

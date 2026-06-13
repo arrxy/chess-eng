@@ -111,6 +111,9 @@ body {
 .adv-bar {
   flex: 0 0 8px; border-radius: 4px; overflow: hidden;
   display: flex; flex-direction: column; min-height: 0;
+  /* track = white's color, so the remaining (white) share is always visible
+     against the page background; the black segment fills in from the top */
+  background: #ddd8d0;
 }
 .adv-b { background: #1a1816; transition: height .4s ease; }
 .adv-w { background: #ddd8d0; transition: height .4s ease; }
@@ -151,14 +154,17 @@ body {
 
 /* game layout */
 .game-wrap {
-  /* Budget for everything above/below the (square) board: topbar, two player
-     rows, status, actions, gaps and padding. The board is capped by this so the
+  /* Budget for everything above/below the (square) board: two player rows,
+     status, actions, gaps and padding. The header is hidden during a game, so
+     this no longer reserves space for it. The board is capped by this so the
      whole view fits the viewport height without scrolling. */
-  --chrome: 360px;
+  --chrome: 308px;
   display: flex; flex-direction: column; align-items: center;
   gap: 12px; padding: 16px 30px 24px;
 }
-.board-area { width: 100%; max-width: 640px; }
+/* Cap the board by viewport height too, so the square board + surrounding
+   chrome (see --chrome) always fits without scrolling. */
+.board-area { width: 100%; max-width: min(640px, calc(100vh - var(--chrome))); }
 
 /* player row */
 .player-row {
@@ -363,6 +369,8 @@ body {
   background: #c85a3a; color: #fff; border: 1.5px solid #c85a3a;
 }
 .btn-danger:hover { background: #b14d30; border-color: #b14d30; }
+/* compact forfeit button living inside the player row */
+.forfeit-inline { padding: 5px 14px; font-size: 14px; border-radius: 8px 7px 9px 6px; flex: 0 0 auto; }
 
 /* active games (rejoin) list in the lobby */
 .active-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }

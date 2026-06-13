@@ -223,34 +223,41 @@ export default function App() {
 
   const connected = phase === 'game';
 
+  // Hide the header while in a game so the board gets the full viewport height.
+  const inGame = phase === 'game';
+
   return (
     <>
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-name">parallel</span>
-          <span className="brand-sub">— chess</span>
-          {gameCount > 0 && (
-            <span className="games-live">
-              <span className="live-dot" />
-              {gameCount} {gameCount === 1 ? 'game' : 'games'} live
+      {!inGame && (
+        <>
+          <header className="topbar">
+            <div className="brand">
+              <span className="brand-name">parallel</span>
+              <span className="brand-sub">— chess</span>
+              {gameCount > 0 && (
+                <span className="games-live">
+                  <span className="live-dot" />
+                  {gameCount} {gameCount === 1 ? 'game' : 'games'} live
+                </span>
+              )}
+            </div>
+            <span className="auth-box">
+              {user && (
+                <>
+                  {user.picture && <img className="avatar" src={user.picture} alt="" referrerPolicy="no-referrer" />}
+                  <span className="auth-name">{user.name}</span>
+                  <button className="linklike" onClick={onLogout}>sign out</button>
+                </>
+              )}
+              <span className="livecount">
+                <span className={`live-dot ${connected ? '' : 'dim'}`} />
+                {connected ? 'connected' : 'offline'}
+              </span>
             </span>
-          )}
-        </div>
-        <span className="auth-box">
-          {user && (
-            <>
-              {user.picture && <img className="avatar" src={user.picture} alt="" referrerPolicy="no-referrer" />}
-              <span className="auth-name">{user.name}</span>
-              <button className="linklike" onClick={onLogout}>sign out</button>
-            </>
-          )}
-          <span className="livecount">
-            <span className={`live-dot ${connected ? '' : 'dim'}`} />
-            {connected ? 'connected' : 'offline'}
-          </span>
-        </span>
-      </header>
-      <hr className="divider" />
+          </header>
+          <hr className="divider" />
+        </>
+      )}
 
       {phase === 'lobby' &&
         <Lobby onCreate={onCreate} onJoin={onJoin} onRejoin={onRejoin} msg={msg}
