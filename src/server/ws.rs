@@ -312,7 +312,22 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                 .to_string()
                                 .into(),
                         ));
-                        let _ = tx.send(Message::Text(state_msg.clone().into()));
+                        // Deliver the start-of-game state to BOTH local players
+                        // (the creator included) and publish for an opponent on
+                        // another server. Sending only to `tx` + publish left the
+                        // creator un-notified whenever both players share a server,
+                        // because its own pub/sub listener dedups by delivered_by.
+                        {
+                            let games = state.games.lock().unwrap();
+                            if let Some(session) = games.get(&gid) {
+                                if let Some(wtx) = &session.white_tx {
+                                    let _ = wtx.send(Message::Text(state_msg.clone().into()));
+                                }
+                                if let Some(btx) = &session.black_tx {
+                                    let _ = btx.send(Message::Text(state_msg.clone().into()));
+                                }
+                            }
+                        }
                         publish(&state, &gid, &state_msg).await;
                     }
 
