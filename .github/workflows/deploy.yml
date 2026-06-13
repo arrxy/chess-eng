@@ -1,0 +1,24 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_API_TOKEN }}
+
+      - name: Log in to DO Container Registry
+        run: doctl registry login --expiry-seconds 600
+
+      - name: Build and push image
+        run: |
+          docker build -t registry.digitalocean.com/chess-registry/chess:latest .
+          docker push registry.digitalocean.com/chess-registry/chess:latest
