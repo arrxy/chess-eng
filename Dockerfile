@@ -8,22 +8,21 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build the Rust binary
-FROM rust:1.85-slim AS builder
+FROM rust:1.88-slim AS builder
 WORKDIR /app
 
-# Cache dependencies — rebuild only when Cargo files change
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo "fn main(){}" > src/main.rs \
-    && cargo build --release \
-    && rm src/main.rs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy source and the built frontend (required before cargo build — embedded via include_str!)
+# Copy everything needed for the build
+COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY tests/ ./tests/
+# Frontend must be present before cargo build — embedded via include_str!
 COPY --from=frontend /app/static/dist ./static/dist
 
-# Incremental build (touch main.rs so cargo detects the change)
-RUN touch src/main.rs && cargo build --release
+RUN cargo build --release
 
 # Stage 3: Minimal runtime image
 FROM debian:bookworm-slim
