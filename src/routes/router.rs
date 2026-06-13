@@ -27,6 +27,7 @@ pub async fn route(
         .route("/app.css", get(frontend_service::serve_css))
         .route("/ws", get(game_service::ws_upgrade))
         .route("/stats", get(game_service::stats))
+        .route("/version", get(game_service::version))
         .route("/auth/config", get(auth::auth_config))
         .route("/auth/google", post(auth::auth_google))
         .route("/auth/me", get(auth::auth_me))
