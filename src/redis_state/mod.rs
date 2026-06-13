@@ -88,8 +88,79 @@ pub async fn save_state(
     let key = game_key(game_id);
     let mut conn = pool.get().await?;
     let _: usize = conn.hset(&key, "state", json).await?;
+    // Bump the version so any in-flight optimistic move sees a conflict and
+    // retries against this newer state.
+    let _: i64 = conn.hincr(&key, "version", 1).await?;
     let _: bool = conn.expire(&key, ttl_secs as i64).await?;
     Ok(())
+}
+
+/// Read both the state and its version in a single round-trip. Used by the
+/// optimistic move path so it can compare-and-set.
+pub async fn load_versioned(
+    pool: &RedisPool,
+    game_id: &str,
+) -> anyhow::Result<Option<(RedisGameState, u64)>> {
+    let key = game_key(game_id);
+    let mut conn = pool.get().await?;
+    let (state_json, ver): (Option<String>, Option<String>) =
+        bb8_redis::redis::cmd("HMGET")
+            .arg(&key)
+            .arg("state")
+            .arg("version")
+            .query_async(&mut *conn)
+            .await?;
+    match state_json {
+        None => Ok(None),
+        Some(s) => {
+            let state = serde_json::from_str(&s)?;
+            let version = ver.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+            Ok(Some((state, version)))
+        }
+    }
+}
+
+pub enum CasResult {
+    Updated,
+    Conflict,
+    Missing,
+}
+
+/// Atomically write the state only if the stored version still matches
+/// `expected_version`. Replaces the per-move distributed lock: one Lua call
+/// does the version check + write + TTL refresh, so a move costs HMGET + EVAL
+/// instead of SET-NX + HGET + HSET + EXPIRE + EVAL-release.
+pub async fn cas_save(
+    pool: &RedisPool,
+    game_id: &str,
+    state: &RedisGameState,
+    expected_version: u64,
+    ttl_secs: u64,
+) -> anyhow::Result<CasResult> {
+    const LUA: &str = "local v = redis.call('HGET', KEYS[1], 'version') \
+        if v == false then return -1 end \
+        if v ~= ARGV[1] then return 0 end \
+        redis.call('HSET', KEYS[1], 'state', ARGV[2]) \
+        redis.call('HINCRBY', KEYS[1], 'version', 1) \
+        redis.call('PEXPIRE', KEYS[1], ARGV[3]) \
+        return 1";
+    let json = serde_json::to_string(state)?;
+    let key = game_key(game_id);
+    let mut conn = pool.get().await?;
+    let r: i64 = bb8_redis::redis::cmd("EVAL")
+        .arg(LUA)
+        .arg(1)
+        .arg(&key)
+        .arg(expected_version.to_string())
+        .arg(json)
+        .arg((ttl_secs * 1000) as i64)
+        .query_async(&mut *conn)
+        .await?;
+    Ok(match r {
+        1 => CasResult::Updated,
+        0 => CasResult::Conflict,
+        _ => CasResult::Missing,
+    })
 }
 
 /// Remove a game's state entirely (used when the inactivity sweeper abandons it).
