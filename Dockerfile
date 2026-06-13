@@ -19,10 +19,14 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY tests/ ./tests/
+# The `stress` workspace member must be present for cargo to load the
+# workspace, but it is a dev/load-test tool and is not built into the image.
+COPY stress/ ./stress/
 # Frontend must be present before cargo build — embedded via include_str!
 COPY --from=frontend /app/static/dist ./static/dist
 
-RUN cargo build --release
+# Build only the server binary; the stress crate is skipped.
+RUN cargo build --release --bin chess
 
 # Stage 3: Minimal runtime image
 FROM debian:bookworm-slim
