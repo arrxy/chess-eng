@@ -151,8 +151,12 @@ body {
 
 /* game layout */
 .game-wrap {
+  /* Budget for everything above/below the (square) board: topbar, two player
+     rows, status, actions, gaps and padding. The board is capped by this so the
+     whole view fits the viewport height without scrolling. */
+  --chrome: 360px;
   display: flex; flex-direction: column; align-items: center;
-  gap: 12px; padding: 16px 30px 60px;
+  gap: 12px; padding: 16px 30px 24px;
 }
 .board-area { width: 100%; max-width: 640px; }
 
