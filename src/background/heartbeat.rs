@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use mongodb::bson::oid::ObjectId;
 
 use bb8_redis::redis::{AsyncCommands, cmd};
 
-use crate::redis_state::{self, pool::RedisPool, stream};
+use crate::redis_state::{self, shards::Shards, stream};
 use crate::repository::game_repository::GameRepository;
 
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -12,14 +13,17 @@ const HEARTBEAT_TTL_SECS: u64 = 15;
 const PEER_CHECK_EVERY_N_TICKS: u32 = 2; // check peers every 10s (2 × 5s)
 const CLAIM_MIN_IDLE_MS: u64 = 15_000;
 
-pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
+pub async fn run(shards: Arc<Shards>, server_id: String, repo: GameRepository) {
+    // Heartbeats, known_servers, server-games and the move stream are all
+    // coordination data, kept on the coord node.
+    let coord = shards.coord();
     let mut tick: u32 = 0;
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS)).await;
         tick += 1;
 
         // Refresh our own heartbeat.
-        if let Ok(mut conn) = pool.get().await {
+        if let Ok(mut conn) = coord.get().await {
             let _: Result<(), _> = cmd("SETEX")
                 .arg(format!("server:{}:heartbeat", server_id))
                 .arg(HEARTBEAT_TTL_SECS)
@@ -35,7 +39,7 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
 
         // Scan known peers.
         let peers: Vec<String> = {
-            let Ok(mut conn) = pool.get().await else { continue };
+            let Ok(mut conn) = coord.get().await else { continue };
             conn.smembers::<_, Vec<String>>("known_servers")
                 .await
                 .unwrap_or_default()
@@ -47,7 +51,7 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
             }
 
             let alive: bool = {
-                let Ok(mut conn) = pool.get().await else { continue };
+                let Ok(mut conn) = coord.get().await else { continue };
                 let v: Option<String> = conn
                     .get(format!("server:{peer_id}:heartbeat"))
                     .await
@@ -63,7 +67,7 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
 
             // Claim all entries that were pending for this dead consumer.
             let entries =
-                match stream::xautoclaim(&pool, &server_id, &peer_id, CLAIM_MIN_IDLE_MS).await {
+                match stream::xautoclaim(coord, &server_id, &peer_id, CLAIM_MIN_IDLE_MS).await {
                     Ok(e) => e,
                     Err(e) => {
                         eprintln!("heartbeat: xautoclaim error for {peer_id}: {e}");
@@ -97,8 +101,8 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
                         continue;
                     }
                 }
-                let _ = stream::xack(&pool, &ack_ids).await;
-                let _ = stream::xdel(&pool, &ack_ids).await;
+                let _ = stream::xack(coord, &ack_ids).await;
+                let _ = stream::xdel(coord, &ack_ids).await;
 
                 // Finalize or mark games as disconnected.
                 for ((mongo_id_str, game_id), _) in &batches {
@@ -106,21 +110,21 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
                         Ok(id) => id,
                         Err(_) => continue,
                     };
-                    recover_game(&pool, &repo, game_id, mongo_id, &server_id).await;
+                    recover_game(&shards, &repo, game_id, mongo_id, &server_id).await;
                 }
             }
 
             // Recover games that were on the dead server (may not have pending stream entries
             // if the server died before sending any moves through the queue).
             let game_ids: Vec<String> = {
-                let Ok(mut conn) = pool.get().await else { continue };
+                let Ok(mut conn) = coord.get().await else { continue };
                 conn.smembers::<_, Vec<String>>(format!("server:{peer_id}:games"))
                     .await
                     .unwrap_or_default()
             };
 
             for game_id in &game_ids {
-                if let Ok(Some(rs)) = redis_state::load_state(&pool, game_id).await {
+                if let Ok(Some(rs)) = redis_state::load_state(shards.pool(game_id), game_id).await {
                     let mongo_id = match rs
                         .mongo_game_id
                         .as_deref()
@@ -129,12 +133,12 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
                         Some(id) => id,
                         None => continue,
                     };
-                    recover_game(&pool, &repo, game_id, mongo_id, &server_id).await;
+                    recover_game(&shards, &repo, game_id, mongo_id, &server_id).await;
                 }
             }
 
             // Clean up dead peer's tracking keys.
-            if let Ok(mut conn) = pool.get().await {
+            if let Ok(mut conn) = coord.get().await {
                 let _: Result<i64, _> = conn.srem("known_servers", &peer_id).await;
                 let _: Result<i64, _> = conn.del(format!("server:{peer_id}:games")).await;
             }
@@ -143,12 +147,13 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
 }
 
 async fn recover_game(
-    pool: &RedisPool,
+    shards: &Shards,
     repo: &GameRepository,
     game_id: &str,
     mongo_id: ObjectId,
     server_id: &str,
 ) {
+    let pool = shards.pool(game_id);
     let rs = match redis_state::load_state(pool, game_id).await {
         Ok(Some(s)) => s,
         _ => return,
@@ -167,14 +172,14 @@ async fn recover_game(
     } else if rs.started {
         // Game was in progress — mark as disconnected and notify the surviving player.
         let _ = redis_state::save_state(pool, game_id, &rs, redis_state::TTL_DISCONNECTED).await;
-        publish_disconnect(pool, game_id, server_id).await;
+        publish_disconnect(shards, game_id, server_id).await;
     }
 }
 
-async fn publish_disconnect(pool: &RedisPool, game_id: &str, _server_id: &str) {
+async fn publish_disconnect(shards: &Shards, game_id: &str, _server_id: &str) {
     let msg = serde_json::json!({"type": "opponent_disconnected"}).to_string();
     let channel = redis_state::pubsub_channel(game_id);
-    if let Ok(mut conn) = pool.get().await {
+    if let Ok(mut conn) = shards.pool(game_id).get().await {
         let _: Result<i64, _> = conn.publish(channel, msg).await;
     }
 }

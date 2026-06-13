@@ -3,7 +3,7 @@ pub mod ws;
 
 use crate::db::mongo::Db;
 use crate::pieces::pieces::{Color, PieceType};
-use crate::redis_state::pool::RedisPool;
+use crate::redis_state::shards::Shards;
 use auth::GoogleVerifier;
 use axum::extract::ws::Message;
 use mongodb::bson::oid::ObjectId;
@@ -51,8 +51,7 @@ impl LocalGameSession {
 #[derive(Clone)]
 pub struct AppState {
     pub games: Arc<Mutex<HashMap<String, LocalGameSession>>>,
-    pub redis: RedisPool,
-    pub redis_url: String,
+    pub shards: Arc<Shards>,
     pub server_id: String,
     pub db: Arc<Db>,
     pub user_repository: UserRepository,
@@ -65,15 +64,13 @@ impl AppState {
     pub fn new(
         db: Db,
         google: Option<GoogleVerifier>,
-        redis: RedisPool,
-        redis_url: String,
+        shards: Arc<Shards>,
         server_id: String,
         game_repository: GameRepository,
     ) -> Self {
         Self {
             games: Arc::new(Mutex::new(HashMap::new())),
-            redis,
-            redis_url,
+            shards,
             server_id,
             user_repository: UserRepository::new(db.users.clone()),
             session_repository: SessionRepository::new(db.sessions.clone()),

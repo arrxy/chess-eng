@@ -68,7 +68,8 @@ fn game_status_str(rs: &RedisGameState) -> &'static str {
 
 async fn sadd_server_game(state: &AppState, game_id: &str) {
     use bb8_redis::redis::AsyncCommands;
-    if let Ok(mut conn) = state.redis.get().await {
+    // server-games tracking is coordination data — always on the coord node.
+    if let Ok(mut conn) = state.shards.coord().get().await {
         let _: Result<i64, _> = conn
             .sadd(format!("server:{}:games", state.server_id), game_id)
             .await;
@@ -77,7 +78,7 @@ async fn sadd_server_game(state: &AppState, game_id: &str) {
 
 async fn srem_server_game(state: &AppState, game_id: &str) {
     use bb8_redis::redis::AsyncCommands;
-    if let Ok(mut conn) = state.redis.get().await {
+    if let Ok(mut conn) = state.shards.coord().get().await {
         let _: Result<i64, _> = conn
             .srem(format!("server:{}:games", state.server_id), game_id)
             .await;
@@ -115,7 +116,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let rs = new_redis_state(&game, user.as_ref());
 
                         if let Err(e) =
-                            redis_state::save_state(&state.redis, &gid, &rs, TTL_WAITING).await
+                            redis_state::save_state(state.shards.pool(&gid), &gid, &rs, TTL_WAITING).await
                         {
                             eprintln!("create: save_state failed: {e}");
                             continue;
@@ -133,7 +134,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         }
 
                         tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
-                            state.redis_url.clone(),
+                            state.shards.url(&gid).to_string(),
                             gid.clone(),
                             tx.clone(),
                             cancel,
@@ -156,7 +157,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         };
 
                         let rs_opt =
-                            match redis_state::load_state(&state.redis, &gid).await {
+                            match redis_state::load_state(state.shards.pool(&gid), &gid).await {
                                 Ok(v) => v,
                                 Err(e) => {
                                     eprintln!("join: load_state failed: {e}");
@@ -231,7 +232,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         }
 
                         let lock =
-                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
+                            match RedisLock::acquire(state.shards.pool(&gid), &gid, &state.server_id).await {
                                 Ok(l) => l,
                                 Err(e) => {
                                     eprintln!("join: lock failed: {e}");
@@ -240,7 +241,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             };
 
                         let mut rs =
-                            match redis_state::load_state(&state.redis, &gid).await {
+                            match redis_state::load_state(state.shards.pool(&gid), &gid).await {
                                 Ok(Some(s)) => s,
                                 _ => {
                                     lock.release().await;
@@ -290,7 +291,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let _ = mongo_id; // used via rs.mongo_game_id
 
                         if let Err(e) =
-                            redis_state::save_state(&state.redis, &gid, &rs, TTL_INACTIVITY).await
+                            redis_state::save_state(state.shards.pool(&gid), &gid, &rs, TTL_INACTIVITY).await
                         {
                             eprintln!("join: save_state failed: {e}");
                             lock.release().await;
@@ -366,7 +367,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let mut outcome = Applied::Conflict;
                         for _ in 0..MAX_MOVE_RETRIES {
                             let (mut rs, version) =
-                                match redis_state::load_versioned(&state.redis, &gid).await {
+                                match redis_state::load_versioned(state.shards.pool(&gid), &gid).await {
                                     Ok(Some(v)) => v,
                                     Ok(None) => {
                                         outcome = Applied::NotFound;
@@ -459,7 +460,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                 TTL_INACTIVITY
                             };
 
-                            match redis_state::cas_save(&state.redis, &gid, &rs, version, ttl).await {
+                            match redis_state::cas_save(state.shards.pool(&gid), &gid, &rs, version, ttl).await {
                                 Ok(redis_state::CasResult::Updated) => {
                                     outcome = Applied::Ok { rs, status_str, move_record, game_end };
                                     break;
@@ -535,13 +536,13 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             // Mongo finalized — clear the recovery marker.
                             rs.final_status = None;
                             let _ = redis_state::save_state(
-                                &state.redis, &gid, &rs, TTL_PERSISTED,
+                                state.shards.pool(&gid), &gid, &rs, TTL_PERSISTED,
                             )
                             .await;
                         } else if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
                             // Non-final move: queue for batch flush to Mongo.
                             if let Err(e) =
-                                stream::xadd_move(&state.redis, &gid, &id.to_hex(), &mr).await
+                                stream::xadd_move(state.shards.coord(), &gid, &id.to_hex(), &mr).await
                             {
                                 eprintln!("move: xadd_move failed: {e}");
                             }
@@ -582,7 +583,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let x = v["x"].as_u64().unwrap_or(0) as u8;
                         let y = v["y"].as_u64().unwrap_or(0) as u8;
 
-                        let rs = match redis_state::load_state(&state.redis, &gid).await {
+                        let rs = match redis_state::load_state(state.shards.pool(&gid), &gid).await {
                             Ok(Some(s)) => s,
                             _ => continue,
                         };
@@ -624,7 +625,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             _ => continue,
                         };
 
-                        let rs = match redis_state::load_state(&state.redis, &gid).await {
+                        let rs = match redis_state::load_state(state.shards.pool(&gid), &gid).await {
                             Ok(Some(s)) => s,
                             _ => {
                                 let _ = tx.send(Message::Text(
@@ -676,14 +677,14 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         };
 
                         let lock =
-                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
+                            match RedisLock::acquire(state.shards.pool(&gid), &gid, &state.server_id).await {
                                 Ok(l) => l,
                                 Err(e) => {
                                     eprintln!("forfeit: lock failed: {e}");
                                     continue;
                                 }
                             };
-                        let mut rs = match redis_state::load_state(&state.redis, &gid).await {
+                        let mut rs = match redis_state::load_state(state.shards.pool(&gid), &gid).await {
                             Ok(Some(s)) => s,
                             _ => {
                                 lock.release().await;
@@ -704,7 +705,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         rs.final_status = Some(final_status);
                         rs.persisted = true;
                         let _ = redis_state::save_state(
-                            &state.redis, &gid, &rs, TTL_PERSISTED,
+                            state.shards.pool(&gid), &gid, &rs, TTL_PERSISTED,
                         )
                         .await;
                         lock.release().await;
@@ -718,7 +719,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         }
                         rs.final_status = None;
                         let _ = redis_state::save_state(
-                            &state.redis, &gid, &rs, TTL_PERSISTED,
+                            state.shards.pool(&gid), &gid, &rs, TTL_PERSISTED,
                         )
                         .await;
 
@@ -780,10 +781,10 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
         // kept alive for the rejoin window (TTL_INACTIVITY); the inactivity
         // sweeper marks it Abandoned only after 60 min with no activity. We
         // touch updated_at so that window is measured from this disconnect.
-        if let Ok(Some(rs)) = redis_state::load_state(&state.redis, &gid).await {
+        if let Ok(Some(rs)) = redis_state::load_state(state.shards.pool(&gid), &gid).await {
             if !rs.persisted {
                 let _ =
-                    redis_state::save_state(&state.redis, &gid, &rs, TTL_INACTIVITY).await;
+                    redis_state::save_state(state.shards.pool(&gid), &gid, &rs, TTL_INACTIVITY).await;
                 if rs.started {
                     if let Some(mongo_id) = rs
                         .mongo_game_id
@@ -803,7 +804,9 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
 
 async fn publish(state: &AppState, game_id: &str, msg: &str) {
     use bb8_redis::redis::AsyncCommands;
-    if let Ok(mut conn) = state.redis.get().await {
+    // Publish on the game's shard node — the same node every server subscribes
+    // to for this game, so cross-server delivery works.
+    if let Ok(mut conn) = state.shards.pool(game_id).get().await {
         let channel = crate::redis_state::pubsub_channel(game_id);
         let _: Result<i64, _> = conn.publish(channel, msg).await;
     }
@@ -867,7 +870,7 @@ async fn attach_player(state: &AppState, game_id: &str, color: Color, tx: &super
         }
     }
     tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
-        state.redis_url.clone(),
+        state.shards.url(game_id).to_string(),
         game_id.to_string(),
         tx.clone(),
         cancel,
