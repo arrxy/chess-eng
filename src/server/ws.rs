@@ -341,114 +341,187 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let tx_ = v["to"]["x"].as_u64().unwrap_or(0) as u8;
                         let ty_ = v["to"]["y"].as_u64().unwrap_or(0) as u8;
                         let promotion = v["promotion"].as_str().and_then(promotion_from_str);
-
-                        let lock =
-                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
-                                Ok(l) => l,
-                                Err(e) => {
-                                    eprintln!("move: lock failed: {e}");
-                                    continue;
-                                }
-                            };
-
-                        let mut rs =
-                            match redis_state::load_state(&state.redis, &gid).await {
-                                Ok(Some(s)) => s,
-                                _ => {
-                                    lock.release().await;
-                                    continue;
-                                }
-                            };
-
-                        if rs.turn != color {
-                            lock.release().await;
-                            let _ = tx.send(Message::Text(
-                                json!({"type":"error","message":"not your turn"})
-                                    .to_string()
-                                    .into(),
-                            ));
-                            continue;
-                        }
-
-                        let mut game = redis_to_game(&rs);
                         let from = Position { x: fx, y: fy };
                         let to = Position { x: tx_, y: ty_ };
 
-                        let piece = game.board().get_piece(from).map(|p| p.piece_type());
-                        let mut captured =
-                            game.board().get_piece(to).map(|p| p.piece_type());
-
-                        if !game.make_move(from, to, promotion) {
-                            lock.release().await;
-                            let _ = tx.send(Message::Text(
-                                json!({"type":"error","message":"invalid move"})
-                                    .to_string()
-                                    .into(),
-                            ));
-                            continue;
+                        // Outcome of the optimistic apply loop.
+                        enum Applied {
+                            Ok {
+                                rs: RedisGameState,
+                                status_str: &'static str,
+                                move_record: Option<MoveRecord>,
+                                game_end: Option<game_schema::GameStatus>,
+                            },
+                            NotFound,
+                            NotYourTurn,
+                            GameOver,
+                            Invalid,
+                            Conflict,
                         }
 
-                        let moved_pawn = matches!(piece, Some(PieceType::Pawn));
-                        if captured.is_none() && moved_pawn && fy != ty_ {
-                            captured = Some(PieceType::Pawn);
-                        }
-                        let last_rank =
-                            match color { Color::White => 0, Color::Black => 7 };
-                        let promoted = if moved_pawn && tx_ == last_rank {
-                            Some(promotion.unwrap_or(PieceType::Queen))
-                        } else {
-                            None
-                        };
+                        // Optimistic concurrency: load+version, apply, compare-and-set.
+                        // No per-move distributed lock; a version conflict (another
+                        // writer touched the game) just retries against fresh state.
+                        const MAX_MOVE_RETRIES: u32 = 5;
+                        let mut outcome = Applied::Conflict;
+                        for _ in 0..MAX_MOVE_RETRIES {
+                            let (mut rs, version) =
+                                match redis_state::load_versioned(&state.redis, &gid).await {
+                                    Ok(Some(v)) => v,
+                                    Ok(None) => {
+                                        outcome = Applied::NotFound;
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("move: load failed: {e}");
+                                        outcome = Applied::NotFound;
+                                        break;
+                                    }
+                                };
 
-                        let move_record = piece.map(|pt| MoveRecord {
-                            color,
-                            piece: pt,
-                            from_x: fx as usize,
-                            from_y: fy as usize,
-                            to_x: tx_ as usize,
-                            to_y: ty_ as usize,
-                            captured,
-                            promotion: promoted,
-                            created_at: DateTime::now(),
-                        });
+                            if rs.persisted {
+                                outcome = Applied::GameOver;
+                                break;
+                            }
+                            if rs.turn != color {
+                                outcome = Applied::NotYourTurn;
+                                break;
+                            }
 
-                        if let Some(taken) = captured {
-                            match color {
-                                Color::White => rs.captured_by_white.push(taken),
-                                Color::Black => rs.captured_by_black.push(taken),
+                            let mut game = redis_to_game(&rs);
+                            let piece =
+                                game.board().get_piece(from).map(|p| p.piece_type());
+                            let mut captured =
+                                game.board().get_piece(to).map(|p| p.piece_type());
+
+                            if !game.make_move(from, to, promotion) {
+                                outcome = Applied::Invalid;
+                                break;
+                            }
+
+                            let moved_pawn = matches!(piece, Some(PieceType::Pawn));
+                            if captured.is_none() && moved_pawn && fy != ty_ {
+                                captured = Some(PieceType::Pawn);
+                            }
+                            let last_rank =
+                                match color { Color::White => 0, Color::Black => 7 };
+                            let promoted = if moved_pawn && tx_ == last_rank {
+                                Some(promotion.unwrap_or(PieceType::Queen))
+                            } else {
+                                None
+                            };
+
+                            let move_record = piece.map(|pt| MoveRecord {
+                                color,
+                                piece: pt,
+                                from_x: fx as usize,
+                                from_y: fy as usize,
+                                to_x: tx_ as usize,
+                                to_y: ty_ as usize,
+                                captured,
+                                promotion: promoted,
+                                created_at: DateTime::now(),
+                            });
+
+                            if let Some(taken) = captured {
+                                match color {
+                                    Color::White => rs.captured_by_white.push(taken),
+                                    Color::Black => rs.captured_by_black.push(taken),
+                                }
+                            }
+
+                            rs = game_to_redis(&game, None, None, &rs);
+
+                            let game_end = match game.status() {
+                                GameStatus::Checkmate => Some(match color {
+                                    Color::White => game_schema::GameStatus::WhiteWon,
+                                    Color::Black => game_schema::GameStatus::BlackWon,
+                                }),
+                                GameStatus::Stalemate => Some(game_schema::GameStatus::Draw),
+                                _ => None,
+                            };
+                            let status_str = match game.status() {
+                                GameStatus::Ongoing => "ongoing",
+                                GameStatus::Check => "check",
+                                GameStatus::Checkmate => "checkmate",
+                                GameStatus::Stalemate => "stalemate",
+                            };
+
+                            // On game end, persist the result + final_status before
+                            // the write so the peer monitor can finalize if we die.
+                            if game_end.is_some() {
+                                rs.final_status = game_end;
+                                rs.persisted = true;
+                            }
+                            let ttl = if game_end.is_some() {
+                                TTL_PERSISTED
+                            } else {
+                                TTL_INACTIVITY
+                            };
+
+                            match redis_state::cas_save(&state.redis, &gid, &rs, version, ttl).await {
+                                Ok(redis_state::CasResult::Updated) => {
+                                    outcome = Applied::Ok { rs, status_str, move_record, game_end };
+                                    break;
+                                }
+                                Ok(redis_state::CasResult::Conflict) => continue,
+                                Ok(redis_state::CasResult::Missing) => {
+                                    outcome = Applied::NotFound;
+                                    break;
+                                }
+                                Err(e) => {
+                                    eprintln!("move: cas failed: {e}");
+                                    outcome = Applied::NotFound;
+                                    break;
+                                }
                             }
                         }
 
-                        rs = game_to_redis(&game, None, None, &rs);
-
-                        let game_end = match game.status() {
-                            GameStatus::Checkmate => Some(match color {
-                                Color::White => game_schema::GameStatus::WhiteWon,
-                                Color::Black => game_schema::GameStatus::BlackWon,
-                            }),
-                            GameStatus::Stalemate => Some(game_schema::GameStatus::Draw),
-                            _ => None,
+                        let (mut rs, status_str, move_record, game_end) = match outcome {
+                            Applied::Ok { rs, status_str, move_record, game_end } => {
+                                (rs, status_str, move_record, game_end)
+                            }
+                            Applied::NotYourTurn => {
+                                let _ = tx.send(Message::Text(
+                                    json!({"type":"error","message":"not your turn"})
+                                        .to_string()
+                                        .into(),
+                                ));
+                                continue;
+                            }
+                            Applied::GameOver => {
+                                let _ = tx.send(Message::Text(
+                                    json!({"type":"error","message":"game over"})
+                                        .to_string()
+                                        .into(),
+                                ));
+                                continue;
+                            }
+                            Applied::Invalid => {
+                                let _ = tx.send(Message::Text(
+                                    json!({"type":"error","message":"invalid move"})
+                                        .to_string()
+                                        .into(),
+                                ));
+                                continue;
+                            }
+                            Applied::NotFound | Applied::Conflict => {
+                                let _ = tx.send(Message::Text(
+                                    json!({"type":"error","message":"move failed, try again"})
+                                        .to_string()
+                                        .into(),
+                                ));
+                                continue;
+                            }
                         };
 
+                        // Side effects after a committed move.
                         let mongo_id = rs
                             .mongo_game_id
                             .as_deref()
                             .and_then(|h| ObjectId::from_str(h).ok());
 
                         if let Some(final_status) = game_end {
-                            // Mark final_status in Redis so peer monitor can finalize if
-                            // this server dies between here and the Mongo calls below.
-                            // persisted=true prevents a later disconnect from
-                            // overwriting the result with Abandoned.
-                            rs.final_status = Some(final_status);
-                            rs.persisted = true;
-                            let _ = redis_state::save_state(
-                                &state.redis, &gid, &rs, TTL_PERSISTED,
-                            )
-                            .await;
-                            lock.release().await;
-
-                            // Synchronously write last move + finalize Mongo.
                             if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
                                 let _ = state
                                     .game_repository
@@ -459,39 +532,21 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                                     .finalize_game(id, final_status)
                                     .await;
                             }
+                            // Mongo finalized — clear the recovery marker.
                             rs.final_status = None;
                             let _ = redis_state::save_state(
                                 &state.redis, &gid, &rs, TTL_PERSISTED,
                             )
                             .await;
-                        } else {
-                            let _ = redis_state::save_state(
-                                &state.redis, &gid, &rs, TTL_INACTIVITY,
-                            )
-                            .await;
-                            lock.release().await;
-
-                            // Non-final move: push to stream for batch flush.
-                            if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
-                                if let Err(e) = stream::xadd_move(
-                                    &state.redis,
-                                    &gid,
-                                    &id.to_hex(),
-                                    &mr,
-                                )
-                                .await
-                                {
-                                    eprintln!("move: xadd_move failed: {e}");
-                                }
+                        } else if let (Some(id), Some(mr)) = (mongo_id, move_record.clone()) {
+                            // Non-final move: queue for batch flush to Mongo.
+                            if let Err(e) =
+                                stream::xadd_move(&state.redis, &gid, &id.to_hex(), &mr).await
+                            {
+                                eprintln!("move: xadd_move failed: {e}");
                             }
                         }
 
-                        let status_str = match game.status() {
-                            GameStatus::Ongoing => "ongoing",
-                            GameStatus::Check => "check",
-                            GameStatus::Checkmate => "checkmate",
-                            GameStatus::Stalemate => "stalemate",
-                        };
                         let last_move_val = Some(json!({
                             "from": {"x": fx, "y": fy},
                             "to":   {"x": tx_, "y": ty_}
