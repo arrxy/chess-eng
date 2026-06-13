@@ -34,6 +34,10 @@ pub struct Game {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
 
+    // The in-memory / Redis game id (8-char), used by clients to rejoin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_id: Option<String>,
+
     // None = that side was played anonymously
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub white_user_id: Option<ObjectId>,

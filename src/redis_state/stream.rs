@@ -45,6 +45,11 @@ pub async fn xadd_move(
     let mut conn = pool.get().await?;
     let _: String = cmd("XADD")
         .arg(STREAM_KEY)
+        // Approximate cap so orphaned/never-processed entries can't grow the
+        // stream unbounded. Processed entries are removed precisely via XDEL.
+        .arg("MAXLEN")
+        .arg("~")
+        .arg(1_000_000u64)
         .arg("*")
         .arg("game_id")
         .arg(game_id)
@@ -88,6 +93,23 @@ pub async fn xack(pool: &RedisPool, ids: &[String]) -> anyhow::Result<()> {
     let mut conn = pool.get().await?;
     let mut c = cmd("XACK");
     c.arg(STREAM_KEY).arg(CONSUMER_GROUP);
+    for id in ids {
+        c.arg(id);
+    }
+    let _: i64 = c.query_async(&mut *conn).await?;
+    Ok(())
+}
+
+/// Remove entries from the stream after they are flushed to Mongo.
+/// XACK alone only clears the pending-entries list — it does not delete
+/// entries, so without XDEL the stream grows without bound.
+pub async fn xdel(pool: &RedisPool, ids: &[String]) -> anyhow::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = pool.get().await?;
+    let mut c = cmd("XDEL");
+    c.arg(STREAM_KEY);
     for id in ids {
         c.arg(id);
     }

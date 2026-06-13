@@ -33,6 +33,7 @@ pub async fn route(
         .route("/auth/me", get(auth::auth_me))
         .route("/auth/logout", post(auth::auth_logout))
         .route("/api/games", get(game_service::my_games))
+        .route("/api/active-games", get(game_service::active_games))
         .with_state(state);
 
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());

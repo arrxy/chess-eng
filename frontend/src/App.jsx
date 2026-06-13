@@ -40,6 +40,8 @@ export default function App() {
   const [captured, setCaptured]   = useState({ white: [], black: [] });
   // pending pawn promotion: { from, to } while the piece picker is open
   const [promo, setPromo]         = useState(null);
+  // set when the game ends by forfeit/abandon: { winner, reason }
+  const [gameResult, setGameResult] = useState(null);
 
   // auth
   const [user, setUser]           = useState(null);
@@ -93,6 +95,7 @@ export default function App() {
         setPlayers(null);
         setCaptured({ white: [], black: [] });
         setPromo(null);
+        setGameResult(null);
         break;
 
       case 'state':
@@ -122,8 +125,23 @@ export default function App() {
         break;
 
       case 'opponent_disconnected':
-        showMsg('Opponent disconnected.', true);
+        showMsg('Opponent disconnected — they can rejoin.', true);
         break;
+
+      case 'opponent_reconnected':
+        showMsg('Opponent reconnected.');
+        break;
+
+      case 'game_over': {
+        setGameResult({ winner: m.winner, reason: m.reason });
+        const youWon = m.winner === myColorRef.current;
+        if (m.reason === 'forfeit') {
+          showMsg(youWon ? 'Opponent forfeited — you win!' : 'You forfeited.');
+        } else {
+          showMsg(youWon ? 'You win!' : 'You lost.');
+        }
+        break;
+      }
     }
   }, [showMsg]);
 
@@ -183,6 +201,13 @@ export default function App() {
 
   const onCreate = useCallback(() => connect(() => send({ type: 'create' })), [connect, send]);
   const onJoin   = useCallback((gid) => connect(() => send({ type: 'join', game_id: gid })), [connect, send]);
+  const onRejoin = useCallback((gid, color) =>
+    connect(() => send({ type: 'reconnect', game_id: gid, color })), [connect, send]);
+  const onForfeit = useCallback(() => {
+    if (window.confirm('Forfeit this game? Your opponent wins.')) {
+      send({ type: 'forfeit' });
+    }
+  }, [send]);
   const onNewGame = useCallback(() => {
     wsRef.current?.close();
     setPhase('lobby'); setMyColor(null); setGameId(null);
@@ -190,7 +215,7 @@ export default function App() {
     setSelected(null); setLegalMoves([]); setLastMove(null);
     setMsg(null); setGameStarted(false);
     setPlayers(null); setCaptured({ white: [], black: [] });
-    setPromo(null);
+    setPromo(null); setGameResult(null);
   }, []);
   const onCopy = useCallback(() => {
     navigator.clipboard.writeText(gameId).then(() => showMsg('Copied!'));
@@ -228,7 +253,7 @@ export default function App() {
       <hr className="divider" />
 
       {phase === 'lobby' &&
-        <Lobby onCreate={onCreate} onJoin={onJoin} msg={msg}
+        <Lobby onCreate={onCreate} onJoin={onJoin} onRejoin={onRejoin} msg={msg}
           user={user} clientId={clientId} onUser={setUser}
           onAuthError={(e) => showMsg(e, true)}
           onMyGames={() => setPhase('history')} />}
@@ -238,8 +263,9 @@ export default function App() {
           selected={selected} legalMoves={legalMoves} lastMove={lastMove}
           gameId={gameId} gameStarted={gameStarted} msg={msg}
           players={players} captured={captured} user={user} promo={promo}
+          gameResult={gameResult}
           onSquareClick={onSquareClick} onNewGame={onNewGame} onCopy={onCopy}
-          onPromote={onPromote} />}
+          onPromote={onPromote} onForfeit={onForfeit} />}
       {phase === 'history' &&
         <MyGames onBack={() => setPhase('lobby')}
           onReplay={(g) => { setReplayGame(g); setPhase('replay'); }} />}

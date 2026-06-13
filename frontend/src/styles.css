@@ -154,11 +154,11 @@ body {
   display: flex; flex-direction: column; align-items: center;
   gap: 12px; padding: 16px 30px 60px;
 }
-.board-area { width: 100%; max-width: 480px; }
+.board-area { width: 100%; max-width: 640px; }
 
 /* player row */
 .player-row {
-  width: 100%; max-width: 480px;
+  width: 100%; max-width: 640px;
   display: flex; align-items: center; gap: 10px;
   font-size: 17px; padding: 8px 14px;
 }
@@ -175,7 +175,7 @@ body {
 .share-strip {
   display: flex; align-items: center; gap: 10px;
   font-size: 14px; color: var(--ink-soft);
-  padding: 8px 16px; width: 100%; max-width: 480px;
+  padding: 8px 16px; width: 100%; max-width: 640px;
 }
 .share-code {
   font-family: var(--disp); background: var(--bg);
@@ -352,6 +352,25 @@ body {
 }
 .promo-btn:hover { background: var(--sq-dark); }
 .promo-btn .pc { font-size: 30px; }
+
+/* forfeit + game-over actions */
+.game-actions { display: flex; gap: 10px; justify-content: center; }
+.btn-danger {
+  background: #c85a3a; color: #fff; border: 1.5px solid #c85a3a;
+}
+.btn-danger:hover { background: #b14d30; border-color: #b14d30; }
+
+/* active games (rejoin) list in the lobby */
+.active-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.active-title { font-family: var(--disp); font-size: 13px; color: var(--ink-soft); }
+.active-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--card); font-size: 13px;
+}
+.active-row .arow-main { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.active-row .arow-opp { color: var(--ink); }
+.active-row .arow-sub { color: var(--ink-soft); font-size: 11px; }
 
 @media (max-width: 520px) {
   .topbar { padding: 12px 14px 8px; gap: 8px; align-items: center; }

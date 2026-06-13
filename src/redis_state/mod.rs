@@ -11,9 +11,13 @@ use pool::RedisPool;
 use serde::{Deserialize, Serialize};
 
 pub const TTL_WAITING: u64 = 600;
-pub const TTL_ACTIVE: u64 = 7_200;
 pub const TTL_DISCONNECTED: u64 = 1_800;
 pub const TTL_PERSISTED: u64 = 300;
+/// Rejoin window: a game with no activity for this long is abandoned.
+/// Also the live-game TTL, refreshed on every move.
+pub const TTL_INACTIVITY: u64 = 3_600;
+/// Same value as a Duration of seconds, for the Mongo sweeper cutoff.
+pub const INACTIVITY_SECS: i64 = 3_600;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedPiece {
@@ -85,5 +89,12 @@ pub async fn save_state(
     let mut conn = pool.get().await?;
     let _: usize = conn.hset(&key, "state", json).await?;
     let _: bool = conn.expire(&key, ttl_secs as i64).await?;
+    Ok(())
+}
+
+/// Remove a game's state entirely (used when the inactivity sweeper abandons it).
+pub async fn delete_state(pool: &RedisPool, game_id: &str) -> anyhow::Result<()> {
+    let mut conn = pool.get().await?;
+    let _: usize = conn.del(game_key(game_id)).await?;
     Ok(())
 }
