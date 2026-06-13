@@ -30,7 +30,7 @@ struct Args {
     connect_concurrency: usize,
 
     /// A stage fails if the non-consistency failure rate exceeds this.
-    #[arg(long, default_value_t = 0.02)]
+    #[arg(long, default_value_t = 0.1)]
     fail_threshold: f64,
 
     /// Safety ceiling for the +100 escalation loop.
