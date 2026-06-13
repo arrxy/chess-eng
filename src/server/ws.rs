@@ -11,7 +11,7 @@ use crate::board::game::GameStatus;
 use crate::db::game_schema::{self, Move as MoveRecord};
 use crate::pieces::pieces::{Color, PieceType, Position};
 use crate::redis_state::{
-    self, RedisGameState, TTL_ACTIVE, TTL_DISCONNECTED, TTL_PERSISTED, TTL_WAITING,
+    self, RedisGameState, TTL_INACTIVITY, TTL_PERSISTED, TTL_WAITING,
     hydrate::{board_json_from_redis, game_to_redis, new_redis_state, redis_to_game},
     lock::RedisLock,
     stream,
@@ -176,6 +176,44 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             Some(s) => s,
                         };
 
+                        // Returning player: a signed-in user already in this game
+                        // re-entering the id is a rejoin, not a new join.
+                        let user_id_hex = user.as_ref().map(|u| u.id.to_hex());
+                        let returning = match &user_id_hex {
+                            Some(uid) => {
+                                if Some(uid) == rs.white_user_id.as_ref() {
+                                    Some(Color::White)
+                                } else if Some(uid) == rs.black_user_id.as_ref() {
+                                    Some(Color::Black)
+                                } else {
+                                    None
+                                }
+                            }
+                            None => None,
+                        };
+                        if let Some(color) = returning {
+                            attach_player(&state, &gid, color, &tx).await;
+                            game_id = Some(gid.clone());
+                            my_color = Some(color);
+                            let status = game_status_str(&rs);
+                            let state_msg =
+                                state_json_from_redis(&rs, status, None, &state.server_id);
+                            let color_name = color_str(color);
+                            let _ = tx.send(Message::Text(
+                                json!({"type":"joined","game_id":&gid,"color":color_name})
+                                    .to_string()
+                                    .into(),
+                            ));
+                            let _ = tx.send(Message::Text(state_msg.into()));
+                            publish_notification(
+                                &state,
+                                &gid,
+                                json!({"type":"opponent_reconnected"}),
+                            )
+                            .await;
+                            continue;
+                        }
+
                         if rs.black_user_id.is_some()
                             || state
                                 .games
@@ -220,6 +258,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let mongo_id = if has_signed_in_player(&rs) {
                             let doc = game_schema::Game {
                                 id: None,
+                                game_id: Some(gid.clone()),
                                 white_user_id: rs
                                     .white_user_id
                                     .as_deref()
@@ -251,7 +290,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         let _ = mongo_id; // used via rs.mongo_game_id
 
                         if let Err(e) =
-                            redis_state::save_state(&state.redis, &gid, &rs, TTL_ACTIVE).await
+                            redis_state::save_state(&state.redis, &gid, &rs, TTL_INACTIVITY).await
                         {
                             eprintln!("join: save_state failed: {e}");
                             lock.release().await;
@@ -259,29 +298,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         }
                         lock.release().await;
 
-                        sadd_server_game(&state, &gid).await;
-
-                        let cancel = CancellationToken::new();
-                        {
-                            let mut games = state.games.lock().unwrap();
-                            let session =
-                                games.entry(gid.clone()).or_insert_with(|| LocalGameSession {
-                                    white_tx: None,
-                                    black_tx: None,
-                                    white_cancel: None,
-                                    black_cancel: None,
-                                });
-                            session.black_tx = Some(tx.clone());
-                            session.black_cancel = Some(cancel.clone());
-                        }
-
-                        tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
-                            state.redis_url.clone(),
-                            gid.clone(),
-                            tx.clone(),
-                            cancel,
-                            state.server_id.clone(),
-                        ));
+                        attach_player(&state, &gid, Color::Black, &tx).await;
 
                         game_id = Some(gid.clone());
                         my_color = Some(Color::Black);
@@ -406,7 +423,10 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         if let Some(final_status) = game_end {
                             // Mark final_status in Redis so peer monitor can finalize if
                             // this server dies between here and the Mongo calls below.
+                            // persisted=true prevents a later disconnect from
+                            // overwriting the result with Abandoned.
                             rs.final_status = Some(final_status);
+                            rs.persisted = true;
                             let _ = redis_state::save_state(
                                 &state.redis, &gid, &rs, TTL_PERSISTED,
                             )
@@ -431,7 +451,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             .await;
                         } else {
                             let _ = redis_state::save_state(
-                                &state.redis, &gid, &rs, TTL_ACTIVE,
+                                &state.redis, &gid, &rs, TTL_INACTIVITY,
                             )
                             .await;
                             lock.release().await;
@@ -560,43 +580,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                             continue;
                         }
 
-                        let cancel = CancellationToken::new();
-                        {
-                            let mut games = state.games.lock().unwrap();
-                            let session =
-                                games.entry(gid.clone()).or_insert_with(|| LocalGameSession {
-                                    white_tx: None,
-                                    black_tx: None,
-                                    white_cancel: None,
-                                    black_cancel: None,
-                                });
-                            match reconnect_color {
-                                Color::White => {
-                                    if let Some(old) = session.white_cancel.take() {
-                                        old.cancel();
-                                    }
-                                    session.white_tx = Some(tx.clone());
-                                    session.white_cancel = Some(cancel.clone());
-                                }
-                                Color::Black => {
-                                    if let Some(old) = session.black_cancel.take() {
-                                        old.cancel();
-                                    }
-                                    session.black_tx = Some(tx.clone());
-                                    session.black_cancel = Some(cancel.clone());
-                                }
-                            }
-                        }
-
-                        tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
-                            state.redis_url.clone(),
-                            gid.clone(),
-                            tx.clone(),
-                            cancel,
-                            state.server_id.clone(),
-                        ));
-
-                        sadd_server_game(&state, &gid).await;
+                        attach_player(&state, &gid, reconnect_color, &tx).await;
                         game_id = Some(gid.clone());
                         my_color = Some(reconnect_color);
 
@@ -610,17 +594,74 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
                         ));
                         let _ = tx.send(Message::Text(state_msg.into()));
 
-                        let notif = json!({"type":"opponent_reconnected"}).to_string();
-                        let games = state.games.lock().unwrap();
-                        if let Some(session) = games.get(&gid) {
-                            let other = match reconnect_color {
-                                Color::White => &session.black_tx,
-                                Color::Black => &session.white_tx,
+                        // Notify the opponent (local or on another server).
+                        publish_notification(&state, &gid, json!({"type":"opponent_reconnected"}))
+                            .await;
+                    }
+
+                    "forfeit" => {
+                        let (gid, color) = match (&game_id, my_color) {
+                            (Some(g), Some(c)) => (g.clone(), c),
+                            _ => continue,
+                        };
+
+                        let lock =
+                            match RedisLock::acquire(&state.redis, &gid, &state.server_id).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    eprintln!("forfeit: lock failed: {e}");
+                                    continue;
+                                }
                             };
-                            if let Some(otx) = other {
-                                let _ = otx.send(Message::Text(notif.into()));
+                        let mut rs = match redis_state::load_state(&state.redis, &gid).await {
+                            Ok(Some(s)) => s,
+                            _ => {
+                                lock.release().await;
+                                continue;
                             }
+                        };
+                        // Already finished — ignore.
+                        if rs.persisted {
+                            lock.release().await;
+                            continue;
                         }
+
+                        // The forfeiting player loses; the opponent wins.
+                        let final_status = match color {
+                            Color::White => game_schema::GameStatus::BlackWon,
+                            Color::Black => game_schema::GameStatus::WhiteWon,
+                        };
+                        rs.final_status = Some(final_status);
+                        rs.persisted = true;
+                        let _ = redis_state::save_state(
+                            &state.redis, &gid, &rs, TTL_PERSISTED,
+                        )
+                        .await;
+                        lock.release().await;
+
+                        if let Some(id) = rs
+                            .mongo_game_id
+                            .as_deref()
+                            .and_then(|h| ObjectId::from_str(h).ok())
+                        {
+                            let _ = state.game_repository.finalize_game(id, final_status).await;
+                        }
+                        rs.final_status = None;
+                        let _ = redis_state::save_state(
+                            &state.redis, &gid, &rs, TTL_PERSISTED,
+                        )
+                        .await;
+
+                        let winner = match color {
+                            Color::White => "black",
+                            Color::Black => "white",
+                        };
+                        broadcast(
+                            &state,
+                            &gid,
+                            json!({"type":"game_over","winner":winner,"reason":"forfeit"}),
+                        )
+                        .await;
                     }
 
                     _ => {}
@@ -660,29 +701,31 @@ pub async fn handle_socket(socket: WebSocket, state: AppState, user: Option<Sess
             games.retain(|_, s| s.white_tx.is_some() || s.black_tx.is_some());
         }
 
+        // Notify an opponent on another server (local one already got the direct send).
+        publish_notification(&state, &gid, json!({"type":"opponent_disconnected"})).await;
+
         srem_server_game(&state, &gid).await;
 
-        // Persist abandoned game if needed.
-        if let Ok(Some(mut rs)) = redis_state::load_state(&state.redis, &gid).await {
-            if rs.started && !rs.persisted && has_signed_in_player(&rs) {
-                rs.final_status = Some(game_schema::GameStatus::Abandoned);
-                let _ = redis_state::save_state(&state.redis, &gid, &rs, TTL_DISCONNECTED)
-                    .await;
-                if let Some(mongo_id) = rs
-                    .mongo_game_id
-                    .as_deref()
-                    .and_then(|h| ObjectId::from_str(h).ok())
-                {
-                    let repo = state.game_repository.clone();
-                    tokio::spawn(async move {
-                        let _ = repo
-                            .finalize_game(mongo_id, game_schema::GameStatus::Abandoned)
-                            .await;
-                    });
-                }
-            } else {
+        // Disconnect no longer abandons the game. A started, unfinished game is
+        // kept alive for the rejoin window (TTL_INACTIVITY); the inactivity
+        // sweeper marks it Abandoned only after 60 min with no activity. We
+        // touch updated_at so that window is measured from this disconnect.
+        if let Ok(Some(rs)) = redis_state::load_state(&state.redis, &gid).await {
+            if !rs.persisted {
                 let _ =
-                    redis_state::save_state(&state.redis, &gid, &rs, TTL_DISCONNECTED).await;
+                    redis_state::save_state(&state.redis, &gid, &rs, TTL_INACTIVITY).await;
+                if rs.started {
+                    if let Some(mongo_id) = rs
+                        .mongo_game_id
+                        .as_deref()
+                        .and_then(|h| ObjectId::from_str(h).ok())
+                    {
+                        let repo = state.game_repository.clone();
+                        tokio::spawn(async move {
+                            let _ = repo.touch_game(mongo_id).await;
+                        });
+                    }
+                }
             }
         }
     }
@@ -694,4 +737,71 @@ async fn publish(state: &AppState, game_id: &str, msg: &str) {
         let channel = crate::redis_state::pubsub_channel(game_id);
         let _: Result<i64, _> = conn.publish(channel, msg).await;
     }
+}
+
+/// Publish a control notification (e.g. opponent_disconnected) tagged with this
+/// server's id. The same-server pubsub dedup skips the local opponent (already
+/// notified via a direct send), while an opponent on another server receives it.
+async fn publish_notification(state: &AppState, game_id: &str, mut msg: Value) {
+    msg["delivered_by"] = json!(state.server_id);
+    publish(state, game_id, &msg.to_string()).await;
+}
+
+/// Deliver a message to both players: directly to any local connections, and
+/// published for an opponent on another server.
+async fn broadcast(state: &AppState, game_id: &str, msg: Value) {
+    let text = msg.to_string();
+    {
+        let games = state.games.lock().unwrap();
+        if let Some(s) = games.get(game_id) {
+            if let Some(t) = &s.white_tx {
+                let _ = t.send(Message::Text(text.clone().into()));
+            }
+            if let Some(t) = &s.black_tx {
+                let _ = t.send(Message::Text(text.clone().into()));
+            }
+        }
+    }
+    publish_notification(state, game_id, msg).await;
+}
+
+/// Register (or replace) a player's local connection for a game and start its
+/// pub/sub listener. Used by reconnect and by join when a player returns.
+async fn attach_player(state: &AppState, game_id: &str, color: Color, tx: &super::Tx) {
+    let cancel = CancellationToken::new();
+    {
+        let mut games = state.games.lock().unwrap();
+        let session = games
+            .entry(game_id.to_string())
+            .or_insert_with(|| LocalGameSession {
+                white_tx: None,
+                black_tx: None,
+                white_cancel: None,
+                black_cancel: None,
+            });
+        match color {
+            Color::White => {
+                if let Some(old) = session.white_cancel.take() {
+                    old.cancel();
+                }
+                session.white_tx = Some(tx.clone());
+                session.white_cancel = Some(cancel.clone());
+            }
+            Color::Black => {
+                if let Some(old) = session.black_cancel.take() {
+                    old.cancel();
+                }
+                session.black_tx = Some(tx.clone());
+                session.black_cancel = Some(cancel.clone());
+            }
+        }
+    }
+    tokio::spawn(crate::redis_state::pubsub::pubsub_listener(
+        state.redis_url.clone(),
+        game_id.to_string(),
+        tx.clone(),
+        cancel,
+        state.server_id.clone(),
+    ));
+    sadd_server_game(state, game_id).await;
 }

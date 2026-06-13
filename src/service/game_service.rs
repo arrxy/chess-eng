@@ -47,6 +47,41 @@ pub async fn my_games(
     Json(response).into_response()
 }
 
+/// In-progress games the signed-in user can rejoin.
+pub async fn active_games(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(user) = user_from_headers(&state, &headers).await else {
+        return auth::error_response(StatusCode::UNAUTHORIZED, "not signed in");
+    };
+    let games = match state.game_repository.get_active_games_by_user(user.id).await {
+        Ok(games) => games,
+        Err(_) => {
+            return auth::error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error");
+        }
+    };
+    let list: Vec<Value> = games
+        .iter()
+        .map(|g| {
+            let your_color = if g.white_user_id == Some(user.id) {
+                "white"
+            } else {
+                "black"
+            };
+            let opponent = if your_color == "white" {
+                g.black_name.clone()
+            } else {
+                g.white_name.clone()
+            };
+            json!({
+                "game_id": g.game_id,
+                "your_color": your_color,
+                "opponent": opponent.unwrap_or_else(|| "Anonymous".to_string()),
+                "moves": g.moves.len(),
+            })
+        })
+        .collect();
+    Json(json!({ "games": list })).into_response()
+}
+
 pub(crate) async fn stats(State(state): State<AppState>) -> impl IntoResponse {
     let count = state.games.lock().unwrap().len();
     Json(json!({ "games": count }))

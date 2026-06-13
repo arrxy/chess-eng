@@ -98,6 +98,7 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
                     }
                 }
                 let _ = stream::xack(&pool, &ack_ids).await;
+                let _ = stream::xdel(&pool, &ack_ids).await;
 
                 // Finalize or mark games as disconnected.
                 for ((mongo_id_str, game_id), _) in &batches {
@@ -161,6 +162,7 @@ async fn recover_game(
         }
         let mut rs = rs;
         rs.final_status = None;
+        rs.persisted = true;
         let _ = redis_state::save_state(pool, game_id, &rs, redis_state::TTL_PERSISTED).await;
     } else if rs.started {
         // Game was in progress — mark as disconnected and notify the surviving player.

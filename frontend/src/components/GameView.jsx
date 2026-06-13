@@ -6,10 +6,11 @@ const PROMOTION_CHOICES = ['queen', 'rook', 'bishop', 'knight'];
 
 export default function GameView({ myColor, turn, status, board, selected, legalMoves, lastMove,
                                    gameId, gameStarted, msg, players, captured, user, promo,
-                                   onSquareClick, onNewGame, onCopy, onPromote }) {
+                                   gameResult, onSquareClick, onNewGame, onCopy, onPromote, onForfeit }) {
   const opponentColor = myColor === 'white' ? 'black' : 'white';
   const myTurn = turn === myColor;
-  const gameOver = status === 'checkmate' || status === 'stalemate';
+  const gameOver = status === 'checkmate' || status === 'stalemate' || !!gameResult;
+  const canForfeit = gameStarted && !gameOver && status !== 'waiting';
 
   const oppName = (players && players[opponentColor]) || opponentColor;
   const myName = (players && players[myColor]) || (user ? user.name : myColor);
@@ -20,13 +21,20 @@ export default function GameView({ myColor, turn, status, board, selected, legal
   const advFor = (color) =>
     Math.max(0, capScores[color] - capScores[color === 'white' ? 'black' : 'white']);
 
-  const statusLabel = {
+  let statusLabel = {
     waiting:   'Waiting for opponent…',
     ongoing:   myTurn ? 'Your turn' : `${turn}'s turn`,
     check:     myTurn ? '⚠ You are in check' : `⚠ ${turn} is in check`,
     checkmate: turn === 'white' ? 'Black wins — Checkmate' : 'White wins — Checkmate',
     stalemate: 'Stalemate — Draw',
   }[status] || '';
+  if (gameResult) {
+    const youWon = gameResult.winner === myColor;
+    const winnerName = gameResult.winner === 'white' ? 'White' : 'Black';
+    statusLabel = gameResult.reason === 'forfeit'
+      ? `${winnerName} wins — ${youWon ? 'opponent forfeited' : 'you forfeited'}`
+      : `${winnerName} wins`;
+  }
 
   return (
     <div className="game-wrap">
@@ -98,11 +106,18 @@ export default function GameView({ myColor, turn, status, board, selected, legal
 
       {msg && <div className={`msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
 
-      {gameOver && (
-        <button className="btn btn-primary" style={{ maxWidth: 200 }} onClick={onNewGame}>
-          New Game
-        </button>
-      )}
+      <div className="game-actions">
+        {canForfeit && (
+          <button className="btn btn-danger" style={{ maxWidth: 200 }} onClick={onForfeit}>
+            Forfeit
+          </button>
+        )}
+        {gameOver && (
+          <button className="btn btn-primary" style={{ maxWidth: 200 }} onClick={onNewGame}>
+            New Game
+          </button>
+        )}
+      </div>
     </div>
   );
 }

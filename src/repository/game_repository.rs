@@ -45,6 +45,8 @@ impl GameRepository {
     }
 
     /// Append move batches to multiple game documents concurrently.
+    /// Also bumps `updated_at` so the inactivity sweeper can tell live games
+    /// from idle ones.
     pub async fn bulk_push_moves(
         &self,
         batches: Vec<(ObjectId, Vec<Move>)>,
@@ -59,13 +61,64 @@ impl GameRepository {
             futs.push(async move {
                 col.update_one(
                     doc! { "_id": id },
-                    doc! { "$push": { "moves": { "$each": moves_bson } } },
+                    doc! {
+                        "$push": { "moves": { "$each": moves_bson } },
+                        "$set": { "updated_at": DateTime::now() },
+                    },
                 )
                 .await
             });
         }
         futures_util::future::try_join_all(futs).await?;
         Ok(())
+    }
+
+    /// Mark a game as recently active without changing moves/status.
+    /// Called on disconnect so the rejoin window is measured from the
+    /// last event, not just the last move.
+    pub async fn touch_game(&self, id: ObjectId) -> mongodb::error::Result<()> {
+        self.games
+            .update_one(
+                doc! { "_id": id },
+                doc! { "$set": { "updated_at": DateTime::now() } },
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// In-progress games the user is part of — used to offer rejoin.
+    pub async fn get_active_games_by_user(
+        &self,
+        user_id: ObjectId,
+    ) -> mongodb::error::Result<Vec<Game>> {
+        let cursor = self
+            .games
+            .find(doc! {
+                "status": "InProgress",
+                "$or": [
+                    { "white_user_id": user_id },
+                    { "black_user_id": user_id },
+                ]
+            })
+            .sort(doc! { "updated_at": -1 })
+            .await?;
+        cursor.try_collect().await
+    }
+
+    /// In-progress games whose last activity is older than `cutoff`.
+    /// The sweeper finalizes these as Abandoned.
+    pub async fn find_stale_in_progress(
+        &self,
+        cutoff: DateTime,
+    ) -> mongodb::error::Result<Vec<Game>> {
+        let cursor = self
+            .games
+            .find(doc! {
+                "status": "InProgress",
+                "updated_at": { "$lt": cutoff },
+            })
+            .await?;
+        cursor.try_collect().await
     }
 
     /// Set the final status and updated_at on a finished game.

@@ -60,6 +60,10 @@ async fn main() {
         server_id.clone(),
         game_repository.clone(),
     ));
+    tokio::spawn(background::sweeper::run(
+        redis.clone(),
+        game_repository.clone(),
+    ));
 
     routes::router::route(db, google, redis, redis_url, server_id, game_repository).await;
 }

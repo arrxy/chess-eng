@@ -56,9 +56,12 @@ pub async fn run(pool: RedisPool, server_id: String, repo: GameRepository) {
             }
         }
 
-        // ACK successfully written entries.
+        // ACK then delete the flushed entries so the stream doesn't grow forever.
         if let Err(e) = stream::xack(&pool, &ack_ids).await {
             eprintln!("batch_flush: xack error: {e}");
+        }
+        if let Err(e) = stream::xdel(&pool, &ack_ids).await {
+            eprintln!("batch_flush: xdel error: {e}");
         }
 
         // Check if any flushed game has final_status set — finalize those.
