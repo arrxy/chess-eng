@@ -203,7 +203,6 @@ docker run -p 3000:3000 --env-file .env chess
 - **[`documents/deployment.md`](documents/deployment.md)** : the production
   deployment runbook.
 - **[`stress/README.md`](stress/README.md)** : the load-testing harness.
-- **[`CLAUDE.md`](CLAUDE.md)** : codebase notes and conventions.
 
 ---
 
