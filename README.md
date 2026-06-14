@@ -1,4 +1,4 @@
-# Distributed Chess : a horizontally-scalable real-time multiplayer chess server
+# Parallel Chess : a horizontally-scalable real-time multiplayer chess server
 
 A multiplayer chess server written in **Rust** that started as a hobby engine and
 grew into a distributed system: stateless app servers behind a load balancer, live
@@ -23,7 +23,7 @@ server dies* was. For the full design story and the load-testing campaign, read
 - **Stateless, scalable servers** : game state lives in Valkey, so any server can
   serve any game and servers are disposable.
 - **Sharded state** across N Valkey nodes by a deterministic hash of the game id.
--  Optimistic concurrency** : a versioned compare-and-set per move (no per-move
+- **Optimistic concurrency** : a versioned compare-and-set per move (no per-move
   distributed lock).
 - **Batched persistence** : moves flow through a Valkey Stream and are bulk-written
   to MongoDB; finished games are replayable.
