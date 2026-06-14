@@ -1,10 +1,10 @@
-# Chess — a horizontally-scalable real-time multiplayer chess server
+# Distributed Chess : a horizontally-scalable real-time multiplayer chess server
 
 A multiplayer chess server written in **Rust** that started as a hobby engine and
 grew into a distributed system: stateless app servers behind a load balancer, live
 game state sharded across **Valkey** (a Redis fork), durable history in **MongoDB**,
 cross-server move delivery over pub/sub, optimistic concurrency, node-failure
-recovery, and a React frontend — all deployed on DigitalOcean with autoscaling and
+recovery, and a React frontend; all deployed on DigitalOcean with autoscaling and
 CI/CD.
 
 The chess was never the hard part. *Where the game lives and what happens when a
@@ -15,22 +15,22 @@ server dies* was. For the full design story and the load-testing campaign, read
 
 ## Features
 
-- ♟️ **Full chess rules** — legal move generation, check/checkmate/stalemate,
+- ♟️ **Full chess rules** : legal move generation, check/checkmate/stalemate,
   castling, en passant, promotion. Validated against 331 real games cross-checked
   with `python-chess`.
 - **Real-time multiplayer** over WebSockets; play anonymously or signed in with
   Google.
-- **Stateless, scalable servers** — game state lives in Valkey, so any server can
+- **Stateless, scalable servers** : game state lives in Valkey, so any server can
   serve any game and servers are disposable.
 - **Sharded state** across N Valkey nodes by a deterministic hash of the game id.
--  Optimistic concurrency** — a versioned compare-and-set per move (no per-move
+-  Optimistic concurrency** : a versioned compare-and-set per move (no per-move
   distributed lock).
-- **Batched persistence** — moves flow through a Valkey Stream and are bulk-written
+- **Batched persistence** : moves flow through a Valkey Stream and are bulk-written
   to MongoDB; finished games are replayable.
 - **Reconnect, forfeit, and a 60-minute rejoin window**; inactive games are swept.
-- **Failure recovery** — heartbeats + peer monitoring claim and finalize an orphaned
+- **Failure recovery** : heartbeats + peer monitoring claim and finalize an orphaned
   game when a server dies.
-- **A load tester that's also a correctness oracle** — it runs a second copy of the
+- **A load tester that's also a correctness oracle** : it runs a second copy of the
   engine and verifies every move's state on both clients.
 
 ---
@@ -198,12 +198,12 @@ docker run -p 3000:3000 --env-file .env chess
 
 ## Further reading
 
-- **[`findings/finding.md`](findings/finding.md)** — the design + load-testing case
+- **[`findings/finding.md`](findings/finding.md)** : the design + load-testing case
   study (HLD, LLD, and what the load tests actually taught).
-- **[`documents/deployment.md`](documents/deployment.md)** — the production
+- **[`documents/deployment.md`](documents/deployment.md)** : the production
   deployment runbook.
-- **[`stress/README.md`](stress/README.md)** — the load-testing harness.
-- **[`CLAUDE.md`](CLAUDE.md)** — codebase notes and conventions.
+- **[`stress/README.md`](stress/README.md)** : the load-testing harness.
+- **[`CLAUDE.md`](CLAUDE.md)** : codebase notes and conventions.
 
 ---
 
