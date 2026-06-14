@@ -1,4 +1,4 @@
-# Distributed Chess : a horizontally-scalable real-time multiplayer chess server
+# Parallel Chess : a horizontally-scalable real-time multiplayer chess server
 
 A multiplayer chess server written in **Rust** that started as a hobby engine and
 grew into a distributed system: stateless app servers behind a load balancer, live
